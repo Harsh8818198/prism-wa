@@ -1,0 +1,11 @@
+# prism-wa runtime (the gateway and the worker share these).
+#
+# Pinned to the versions the test suite ran against, so a build next month is the build that was tested. To upgrade: change a line,
+# run the whole suite (see README), then deploy. Python 3.12 (see Dockerfile).
+fastapi==0.110.1
+starlette==0.37.2
+pydantic==2.10.4
+uvicorn==0.25.0
+psycopg2-binary==2.9.12
+# AES-GCM for the encrypted per-customer Meta tokens (prism_wa/vault.py).
+cryptography==43.0.3

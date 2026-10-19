@@ -1,0 +1,63 @@
+# Render blueprint for prism-wa: the gateway (web) and the worker, one image.
+# https://render.com/docs/blueprint-spec      Step by step: DEPLOY.md ("Putting it live on Render").
+#
+# Create it: Render dashboard -> New -> Blueprint -> connect the prism-wa repository. Render shows every variable marked `sync: false`
+# and waits for you to fill them in. Nothing secret is ever written in this file.
+#
+# Cost: a web service and a background worker on Render's paid tier (the free tier sleeps, and Meta gives up on a webhook that is not answered
+# quickly; a sleeping worker sends nothing). `plan` is left out so Render uses its default paid size; raise it in the dashboard when traffic needs it.
+#
+# The database is the same Supabase Postgres the licence server uses (the WhatsApp tables sit beside the CRM tables), so there is no `databases:`
+# block. DATABASE_URL is Supabase -> Connect -> **Session pooler** (port 5432), exactly as for the licence server. Not the transaction pooler (6543).
+services:
+  - type: web
+    name: prism-wa-gateway
+    runtime: docker
+    region: singapore                 # next to the licence server; cannot be changed later
+    healthCheckPath: /healthz         # never touches the database, so a database blip does not restart a healthy gateway. /readyz is the full check
+    # Runs in the new image before it takes traffic. Applies only the migrations this database has not got; if it fails, the old version keeps serving.
+    # The very first time it REFUSES (0001-0003 change live CRM tables): do DEPLOY.md step 2 once, with WA_FIRST_RUN=yes, then remove that variable.
+    preDeployCommand: python db/apply.py --pending
+    maxShutdownDelaySeconds: 30       # a deploy lets in-flight requests finish
+    envVars:
+      - key: WA_ENV
+        value: prod                   # refuses to start with a weak or missing secret (prism_wa/main.py)
+      - key: LOG_LEVEL
+        value: INFO
+      # --- fill these in when Render asks (what each one is: DEPLOY.md section 2) -------------------------------------------------------
+      - key: DATABASE_URL
+        sync: false
+      - key: WA_APP_SECRET              # Meta app secret (App settings -> Basic). Comma-separate two to rotate with no gap.
+        sync: false
+      - key: WA_VERIFY_TOKEN            # 24+ characters; the same value goes in Meta's webhook form. `python tools/gen_secrets.py` makes one.
+        sync: false
+      - key: WA_INTERNAL_TOKEN          # 32+ characters, shared with the licence server (PRISM_WA_INTERNAL_TOKEN there)
+        sync: false
+      - key: WA_TOKEN_KEYS              # "1:<key>": encrypts customers' Meta tokens. The SAME value on the worker. Keep a copy somewhere safe.
+        sync: false
+      - key: WA_APP_ID                  # the Meta app id
+        sync: false
+      - key: WA_ES_CONFIG_ID            # Embedded Signup configuration id (Meta dashboard). Leave empty until you have one.
+        sync: false
+      # --- optional: add in the dashboard when you want the feature (DEPLOY.md section 2) ---------------------------------------------------
+      #   WA_LLM_API_KEY   (+ WA_LLM_BASE_URL, WA_LLM_MODEL)   AI agents answer; without it they hand every chat to a person
+      #   WA_EMBED_API_KEY (+ WA_EMBED_BASE_URL, WA_EMBED_MODEL)  AI agents find answers by meaning, not only by words
+      #   META_APP_ID / META_APP_SECRET   only if the ads sign-in uses a different Meta app (otherwise WA_APP_ID / WA_APP_SECRET are used)
+      #   WA_GRAPH_VERSION, WA_PAYMENT_LOOKUP_PATH   only if Meta's documentation moves
+      #   WA_FIRST_RUN=yes   ONCE, for the first deploy (see preDeployCommand), then delete it
+
+  - type: worker
+    name: prism-wa-worker
+    runtime: docker
+    region: singapore
+    dockerCommand: python -m prism_wa.worker
+    maxShutdownDelaySeconds: 30       # on SIGTERM it finishes the pass it is on, then stops
+    envVars:
+      - key: LOG_LEVEL
+        value: INFO
+      - key: DATABASE_URL               # the SAME database as the gateway
+        sync: false
+      - key: WA_TOKEN_KEYS              # the SAME keys as the gateway: it sends messages and checks payments with the stored tokens
+        sync: false
+      # --- optional, same as the gateway's: the AI agents answer from here -------------------------------------------------------------
+      #   WA_LLM_API_KEY / WA_LLM_BASE_URL / WA_LLM_MODEL, WA_EMBED_API_KEY / WA_EMBED_BASE_URL / WA_EMBED_MODEL, WA_GRAPH_VERSION

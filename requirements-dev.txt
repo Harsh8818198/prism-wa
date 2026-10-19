@@ -1,0 +1,5 @@
+# Test-only dependencies. The SQL migrations themselves need nothing but Postgres.
+-r requirements.txt
+pytest>=8
+# TestClient's transport (the gateway tests).
+httpx>=0.25

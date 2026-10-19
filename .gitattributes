@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.sql text eol=lf
+*.py text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
