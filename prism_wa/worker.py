@@ -12,6 +12,7 @@ import logging
 import os
 import signal
 import socket
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -94,13 +95,14 @@ def cycle(connect: Callable, *, graph: Graph, vault: Vault, limiter: Optional[se
     return out
 
 
-def run_forever(connect: Callable, *, graph: Graph, vault: Vault, worker_id: str = "") -> None:
+def run_forever(connect: Callable, *, graph: Graph, vault: Vault, worker_id: str = "", stop: Optional[threading.Event] = None) -> None:
+    """Run passes until `stop` is set (or SIGINT/SIGTERM arrives, when this is the main thread). It finishes the pass it is on first."""
     worker_id = worker_id or "%s-%d" % (socket.gethostname(), os.getpid())
     limiter = send.RateLimiter()
-    stop = {"now": False}
+    stop = stop if stop is not None else threading.Event()
 
     def _stop(*_):
-        stop["now"] = True
+        stop.set()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             signal.signal(sig, _stop)
@@ -110,7 +112,7 @@ def run_forever(connect: Callable, *, graph: Graph, vault: Vault, worker_id: str
     last_reap = datetime.min.replace(tzinfo=timezone.utc)
     last_beat = datetime.min.replace(tzinfo=timezone.utc)
     log.info("worker %s started", worker_id)
-    while not stop["now"]:
+    while not stop.is_set():
         try:
             due = jobs.utcnow() - last_reap >= REAP_EVERY
             c = cycle(connect, graph=graph, vault=vault, limiter=limiter, worker_id=worker_id, reap=due)
@@ -121,10 +123,10 @@ def run_forever(connect: Callable, *, graph: Graph, vault: Vault, worker_id: str
                 last_beat = jobs.utcnow()
         except Exception:                                   # noqa: BLE001
             log.exception("worker cycle failed; backing off")
-            time.sleep(5)
+            stop.wait(5)
             continue
         if not c.busy:
-            time.sleep(IDLE_SLEEP)
+            stop.wait(IDLE_SLEEP)
     log.info("worker %s stopped", worker_id)
 
 

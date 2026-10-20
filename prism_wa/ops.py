@@ -29,6 +29,7 @@ from prism_wa import (ads, ai_agent, audit, coexistence, commerce, form_endpoint
                       integrations, media, number_info, ops_book, ops_ads, ops_ai, ops_autos, ops_campaigns, ops_chat, ops_flows, ops_media, ops_templates, ops_usage, plans, schedules, segments, send, template_library, template_ai, templates, usage, webhooks_out)
 from prism_wa.graph import Graph, GraphError
 from prism_wa import capi
+from prism_wa.ops_common import refuse
 from prism_wa.llm import LLMError
 from prism_wa.vault import Vault
 
@@ -860,7 +861,7 @@ def mount(app: FastAPI, *, authorised: Callable, connect: Callable, graph: Graph
     def add(path: str, fn, with_conn: bool) -> None:
         async def handler(request: Request):
             if not authorised(request):
-                return JSONResponse({"ok": False, "error": "unauthorised"}, status_code=401)
+                return await refuse(request)
             try:
                 data = await request.json()
             except ValueError:

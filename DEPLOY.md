@@ -95,6 +95,21 @@ payment and sign-in callbacks and the connection-pool fix). Then `https://<licen
 **Going back.** Unset `PRISM_WA_URL` on the licence server and the app is on n8n again, with no deploy. The migrations only add things, so rolling
 the code back to an older deploy is safe too.
 
+## The free option (one service, no cost)
+
+Render's free tier has web services but no background workers, so `render.free.yaml` runs the worker as a thread of the gateway (`WA_EMBEDDED_WORKER`) and
+applies migrations when the service starts (`WA_MIGRATE_ON_START`). It is the same code and the same database as the paid setup.
+
+* Do steps 1–3 as written (GitHub, secrets, the first migration by hand). Then in step 4 use **Blueprints → New Blueprint Instance**, pick the repository and
+  set **Blueprint Path** to `render.free.yaml`. You fill in seven variables (the gateway's) instead of nine.
+* Steps 5–8 are the same. The service is called `prism-wa`, so its address is `https://prism-wa.onrender.com` (or with a suffix if the name is taken).
+* **A free service sleeps** after 15 minutes without a request and takes about a minute to wake. While asleep nothing is sent or scheduled; the next
+  webhook or request wakes it and the backlog goes out. `/readyz` shows `"worker": "stale"` while it has been asleep.
+* **Do not keep it awake with a pinger** while the licence server is also free: the 750 free hours a month are shared by the whole workspace, and when they run
+  out Render suspends every free service until next month, the licence server included.
+* **Moving to paid later** changes nothing in the database or in Meta: delete this service, create the two in `render.yaml`, set the same variables
+  (and remove `WA_EMBEDDED_WORKER` / `WA_MIGRATE_ON_START`; never run the worker in both places).
+
 ## Keeping it healthy
 
 * **Logs** are on Render (gateway and worker, INFO). The first thing to look at when "nothing is being sent" is `/readyz`: `"worker": "stale"` means
@@ -154,6 +169,7 @@ else); read them before you run it. It adds a column to `agents` (`email`), `pho
 | `WA_TOKEN_KEYS` | encrypts customers' Meta tokens | `python -c "from prism_wa.vault import generate_key as g; print('1:'+g())"` |
 | `WA_ENV` | `prod` on a live service: the gateway then refuses to start with a weak or missing secret (app secret 16+ characters, verify token 24+, internal token 32+, token keys set) and says which | set by `render.yaml` |
 | `LOG_LEVEL` | `INFO` (default), `DEBUG`, `WARNING` | optional |
+| `WA_EMBEDDED_WORKER`, `WA_MIGRATE_ON_START` | `yes` runs the worker inside the gateway, and applies missing migrations when it starts: for a host with no background-worker service or pre-deploy step (the free option below) | `render.free.yaml` sets them |
 | `WA_FIRST_RUN` | `yes` lets a deploy's migration step be the first to touch a database (see step 3). Normally not used: run `--first-run` by hand | optional, once |
 | `PRISM_WA_URL`, `PRISM_WA_INTERNAL_TOKEN`, `THREADPOOL_SIZE` (licence server) | where the licence server finds this service, the shared secret, and how many requests it works on at once (default 100) | see step 7 |
 | `WA_APP_ID`, `WA_ES_CONFIG_ID` | for the connect page | Meta dashboard (Embedded Signup configuration) |

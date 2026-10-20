@@ -1,5 +1,6 @@
 """What a live deployment needs that a feature test never touches: the readiness check, the worker's heartbeat, migrations that apply only what is
 missing (and refuse to be the first), secrets that must be strong, and the post-deploy smoke test itself."""
+import json
 import os
 import socket
 import sys
@@ -14,9 +15,12 @@ import uvicorn
 from fastapi.testclient import TestClient
 
 import apply as migrations
-from prism_wa import health, main as gateway
+import helpers as H
+import payloads as P
+from prism_wa import embedded, health, main as gateway, migrate, send
 from prism_wa.app import create_app
-from prism_wa.vault import generate_key
+from prism_wa.graph import Graph
+from prism_wa.vault import Vault, generate_key
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
@@ -220,6 +224,109 @@ def test_the_smoke_test_fails_when_the_worker_is_gone_and_when_a_secret_is_wrong
     assert by["a forged webhook is refused"] is True and by["the licence server's door is shut without the token"] is True, results
 
 
+def test_a_caller_without_the_token_always_gets_the_refusal_and_never_a_reset(live):
+    # Answering and closing while the caller is still sending made it see a dropped connection about one time in thirty, and the licence server then
+    # said "could not reach the WhatsApp service" for what is really a wrong shared token.
+    base, _ = live
+    body = json.dumps({"tenant_id": "00000000-0000-0000-0000-000000000000"}).encode()
+    answers = [smoke.call("POST", base + "/internal/sso/required", body=body, headers={"Content-Type": "application/json"}, tries=1)[0] for _ in range(120)]
+    assert set(answers) == {401}, [a for a in answers if a != 401][:5]
+
+
 def test_the_smoke_test_stops_at_once_when_nothing_answers():
     results = smoke.run("http://127.0.0.1:1")
     assert [ok for _, ok, _ in results] == [False]
+
+
+# ── a host with no background-worker service: the worker inside the gateway, migrations at start ─────────────────────────────────────────────
+
+class FakeMeta:
+    def __init__(self):
+        self.sent = 0
+
+    def __call__(self, method, url, data, headers):
+        if url.endswith("/messages"):
+            self.sent += 1
+            return 200, json.dumps({"messages": [{"id": "wamid.E%d" % self.sent}]}).encode()
+        return 404, b"{}"
+
+
+def wait_for(check, seconds=25):
+    end = time.time() + seconds
+    while time.time() < end:
+        if check():
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def worker_threads():
+    return [t for t in threading.enumerate() if t.name == embedded.THREAD_NAME and t.is_alive()]
+
+
+def test_the_worker_runs_inside_the_gateway_when_asked_does_the_work_and_stops_with_it(migrated, monkeypatch):
+    key = generate_key()
+    vault = Vault.from_env({"WA_TOKEN_KEYS": "1:" + key})
+    meta = FakeMeta()
+    monkeypatch.setattr(gateway, "Graph", lambda: Graph(meta))
+    tenant, _ = H.onboard(migrated)
+    blob, ver = vault.encrypt("EAAB-customer-token", context=P.WABA)
+    migrated.q("update wabas set token_enc = %s, key_ver = %s", (psycopg2.Binary(blob), ver))
+    H.deliver(migrated, P.inbound(P.text("hello", "wamid.IN1", str(int(time.time())))))
+    app = gateway.create_app_from_env(good_env(DATABASE_URL=migrated.dsn, WA_TOKEN_KEYS="1:" + key, WA_EMBEDDED_WORKER="yes"))
+    with TestClient(app) as client:
+        assert wait_for(lambda: migrated.one("select count(*) from messages where direction = 'in'") == 1)      # it ingested the webhook
+        contact = migrated.one("select id from contacts")
+        conn = psycopg2.connect(migrated.dsn)
+        with conn.cursor() as cur:
+            send.enqueue_text(cur, tenant, contact_id=contact, text="hi back", idem_key="embedded-1")
+        conn.commit()
+        conn.close()
+        assert wait_for(lambda: migrated.one("select status from messages where direction = 'out'") == "sent")   # and delivered the reply
+        assert meta.sent == 1
+        assert wait_for(lambda: client.get("/readyz").json().get("worker") == "running")                          # and says so
+        assert len(worker_threads()) == 1
+    assert wait_for(lambda: not worker_threads(), seconds=10)                                                     # the app's shutdown stopped it
+
+
+def test_the_worker_is_not_started_unless_asked(migrated):
+    app = gateway.create_app_from_env(good_env(DATABASE_URL=migrated.dsn))
+    with TestClient(app):
+        assert worker_threads() == []
+
+
+def test_an_embedded_worker_without_token_keys_refuses_to_start():
+    with pytest.raises(RuntimeError, match="WA_TOKEN_KEYS"):
+        gateway.create_app_from_env(good_env(WA_ENV="", WA_TOKEN_KEYS="", WA_EMBEDDED_WORKER="yes"))
+
+
+def test_the_embedded_worker_starts_its_loop_again_if_it_dies_and_stops_when_asked(monkeypatch):
+    calls, stop = [], threading.Event()
+
+    def loop(*a, **k):
+        calls.append(1)
+        if len(calls) < 3:
+            raise RuntimeError("it died")
+        stop.set()
+    monkeypatch.setattr(embedded.worker, "run_forever", loop)
+    monkeypatch.setattr(embedded, "RESTART_AFTER_SECONDS", 0)
+    embedded._guard(None, None, None, stop)
+    assert len(calls) == 3
+
+
+def test_migrating_at_start_refuses_to_be_the_first_and_changes_nothing(legacy):
+    with pytest.raises(RuntimeError, match="first-run"):
+        gateway.create_app_from_env(good_env(DATABASE_URL=legacy.dsn, WA_MIGRATE_ON_START="yes"))
+    assert legacy.one("select to_regclass('public.wa_schema_migrations')") is None
+
+
+def test_migrating_at_start_applies_everything_once_it_is_allowed_and_then_has_nothing_to_do(legacy):
+    gateway.create_app_from_env(good_env(DATABASE_URL=legacy.dsn, WA_MIGRATE_ON_START="yes", WA_FIRST_RUN="yes"))
+    assert health.readiness(connect_to(legacy))[1]["schema"] == "current"
+    gateway.create_app_from_env(good_env(DATABASE_URL=legacy.dsn, WA_MIGRATE_ON_START="yes"))               # no flag needed now
+    assert migrate.apply_on_start(legacy.dsn) == []
+
+
+def test_migrating_at_start_is_not_done_unless_asked(legacy):
+    gateway.create_app_from_env(good_env(DATABASE_URL=legacy.dsn))
+    assert legacy.one("select to_regclass('public.wa_schema_migrations')") is None

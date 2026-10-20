@@ -27,6 +27,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 
 from prism_wa import campaigns, inbox, onboarding, ops, send
 from prism_wa.graph import Graph
+from prism_wa.ops_common import refuse
 from prism_wa.send import SendRefused
 from prism_wa.vault import Vault
 
@@ -94,7 +95,7 @@ def register(app: FastAPI, *, internal_token: str, connect: Callable, graph: Gra
     @app.post("/internal/reply")
     async def reply(request: Request):
         if not authorised(request):
-            return JSONResponse({"ok": False, "error": "unauthorised"}, status_code=401)
+            return await refuse(request)
         data = await body_of(request)
         if data is None or not _is_uuid(data.get("tenant_id")) or not isinstance(data.get("text"), str) \
                 or not (_is_uuid(data.get("contact_id")) or _is_uuid(data.get("conversation_id"))):
@@ -141,7 +142,7 @@ def register(app: FastAPI, *, internal_token: str, connect: Callable, graph: Gra
     @app.post("/internal/broadcast")
     async def broadcast(request: Request):
         if not authorised(request):
-            return JSONResponse({"ok": False, "error": "unauthorised"}, status_code=401)
+            return await refuse(request)
         data = await body_of(request)
         recipients = (data or {}).get("recipients")
         if (data is None or not _is_uuid(data.get("tenant_id")) or not _is_uuid(data.get("campaign_id"))
@@ -160,7 +161,7 @@ def register(app: FastAPI, *, internal_token: str, connect: Callable, graph: Gra
     @app.post("/internal/onboarding/link")
     async def onboarding_link(request: Request):
         if not authorised(request):
-            return JSONResponse({"ok": False, "error": "unauthorised"}, status_code=401)
+            return await refuse(request)
         data = await body_of(request)
         if data is None or not _is_uuid(data.get("tenant_id")):
             return _bad("tenant_id is required")

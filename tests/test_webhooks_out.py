@@ -20,7 +20,14 @@ from prism_wa.webhooks_out import WebhookError
 
 INTERNAL = "internal-shared-secret"
 AUTH = {"X-Internal-Token": INTERNAL}
-NOW = datetime.now(timezone.utc) + timedelta(minutes=5)        # "now" for the sender: after the rows (made a moment ago) became due
+
+
+def soon():
+    """"Now" for the sender: after the rows (made a moment ago) became due. Taken when a test asks for it, not once when the file is imported: in a
+    long run the import-time clock was minutes older than the rows it was supposed to be later than, and ten of these tests failed for that alone."""
+    return datetime.now(timezone.utc) + timedelta(minutes=5)
+
+
 PUBLIC = {"hooks.example.com": ["93.184.216.34"], "10.example.com": ["10.0.0.5"], "meta.example.com": ["169.254.169.254"], "gone.example.com": []}
 
 
@@ -69,8 +76,8 @@ def world(migrated):
             return cls.do(webhooks_out.create, url=url, events=list(events))
 
         @classmethod
-        def send(cls, now=NOW, **kw):
-            return webhooks_out.deliver_due(cls.conn, transport=recv, now=now, **kw)
+        def send(cls, now=None, **kw):
+            return webhooks_out.deliver_due(cls.conn, transport=recv, now=now or soon(), **kw)
 
         @classmethod
         def rows(cls, sql="select event, state, attempts, response_status, error from webhook_deliveries order by created_at"):
@@ -210,7 +217,7 @@ def test_a_failing_receiver_is_retried_with_a_growing_wait(world):
     world.make()
     world.do(webhooks_out.emit, "message.received", {"x": 1})
     world.recv_.status = 500
-    t = NOW
+    t = soon()
     waits = []
     for attempt in range(1, 6):
         assert world.send(now=t) == {"sent": 0, "retry": 1, "failed": 0}
@@ -229,10 +236,11 @@ def test_a_receiver_that_comes_back_gets_the_delivery_and_a_clean_slate(world):
     world.make()
     world.do(webhooks_out.emit, "message.received", {"x": 1})
     world.recv_.status = 503
-    world.send(now=NOW)
+    first = soon()
+    world.send(now=first)
     world.db.q("update webhook_endpoints set failure_count = 7")
     world.recv_.status = 200
-    assert world.send(now=NOW + timedelta(minutes=2)) == {"sent": 1, "retry": 0, "failed": 0}
+    assert world.send(now=first + timedelta(minutes=2)) == {"sent": 1, "retry": 0, "failed": 0}
     assert world.do(webhooks_out.list_endpoints)[0]["failure_count"] == 0 and world.recv_.calls[-1]["headers"]["X-Prism-Delivery"] == world.recv_.calls[0]["headers"]["X-Prism-Delivery"]
 
 

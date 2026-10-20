@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 
 from prism_wa import media, number_info, reports, usage, webhooks_out
 from prism_wa.graph import Graph
-from prism_wa.ops_common import jsonable, managers_only, need
+from prism_wa.ops_common import jsonable, managers_only, need, refuse
 from prism_wa.vault import Vault
 
 CHANGES_MAX_WAIT = 25
@@ -180,7 +180,7 @@ def mount_realtime(app: FastAPI, *, authorised, connect) -> None:
     @app.post("/internal/inbox/changes")
     async def changes(request: Request):
         if not authorised(request):
-            return JSONResponse({"ok": False, "error": "unauthorised"}, status_code=401)
+            return await refuse(request)
         try:
             data = await request.json()
         except ValueError:

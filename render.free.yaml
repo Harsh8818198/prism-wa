@@ -1,0 +1,57 @@
+# Render blueprint for prism-wa on Render's FREE tier: ONE web service that is both the gateway and the worker.
+# https://render.com/docs/blueprint-spec      Step by step: DEPLOY.md ("The free option").
+#
+# Use this file instead of render.yaml when you do not want to pay: Render's free tier has web services but no background workers, so the worker
+# runs as a thread inside the gateway (WA_EMBEDDED_WORKER) and the database migrations run when the service starts (WA_MIGRATE_ON_START), since a
+# free service has no "before it goes live" step. Create it: Render -> Blueprints -> New Blueprint Instance -> this repository, and set
+# **Blueprint Path** to `render.free.yaml`.
+#
+# What free means (Render's own rules):
+#   * A free web service is stopped after 15 minutes with no inbound traffic and takes about a minute to start again. While it is stopped nothing
+#     runs: queued messages, scheduled campaigns, webhooks out and payment checks wait until the next request wakes it. Meta's webhook and the
+#     desktop app both wake it; Meta retries a webhook that was not answered in time and a repeat is harmless (it is stored once).
+#   * 750 free instance hours a month are shared by EVERY free service in the workspace, and when they run out Render suspends all of them until
+#     the next month. Do not keep this awake with a pinger while the licence server is also on the free tier: together they would use the hours up
+#     and the licence server (activation and renewal for every customer) would be suspended too.
+# So: good for finishing your tests and Meta's review, not for customers who expect a reply the second it is sent. Moving to the paid setup later
+# changes nothing in the database or in Meta: delete this service, create render.yaml's two, set the same variables.
+#
+# The database is the same Supabase Postgres as the licence server (the WhatsApp tables sit beside the CRM tables): DATABASE_URL is Supabase ->
+# Connect -> **Session pooler** (port 5432). Do the first migration by hand first (DEPLOY.md step 3): this service REFUSES to be the first to touch
+# the CRM tables and says so in its log.
+services:
+  - type: web
+    name: prism-wa
+    runtime: docker
+    plan: free
+    region: singapore                 # next to the licence server; cannot be changed later
+    healthCheckPath: /healthz         # never touches the database. /readyz is the full check
+    envVars:
+      - key: WA_ENV
+        value: prod                   # refuses to start with a weak or missing secret (prism_wa/main.py)
+      - key: LOG_LEVEL
+        value: INFO
+      - key: WA_EMBEDDED_WORKER
+        value: "yes"                  # the worker runs inside this process (prism_wa/embedded.py)
+      - key: WA_MIGRATE_ON_START
+        value: "yes"                  # apply missing migrations when it starts (prism_wa/migrate.py); refuses to be the first to touch the database
+      # --- fill these in when Render asks (what each one is: DEPLOY.md section 2) -------------------------------------------------------
+      - key: DATABASE_URL
+        sync: false
+      - key: WA_APP_SECRET              # Meta app secret (App settings -> Basic). Comma-separate two to rotate with no gap.
+        sync: false
+      - key: WA_VERIFY_TOKEN            # 24+ characters; the same value goes in Meta's webhook form. `python tools/gen_secrets.py` makes one.
+        sync: false
+      - key: WA_INTERNAL_TOKEN          # 32+ characters, shared with the licence server (PRISM_WA_INTERNAL_TOKEN there)
+        sync: false
+      - key: WA_TOKEN_KEYS              # "1:<key>": encrypts customers' Meta tokens. Keep a copy somewhere safe (not Render, not the database).
+        sync: false
+      - key: WA_APP_ID                  # the Meta app id
+        sync: false
+      - key: WA_ES_CONFIG_ID            # Embedded Signup configuration id (Meta dashboard). Leave empty until you have one.
+        sync: false
+      # --- optional: add in the dashboard when you want the feature (DEPLOY.md section 2) ---------------------------------------------------
+      #   WA_LLM_API_KEY (+ WA_LLM_BASE_URL, WA_LLM_MODEL)       AI agents answer; without it they hand every chat to a person
+      #   WA_EMBED_API_KEY (+ WA_EMBED_BASE_URL, WA_EMBED_MODEL)  AI agents find answers by meaning, not only by words
+      #   META_APP_ID / META_APP_SECRET   only if the ads sign-in uses a different Meta app (otherwise WA_APP_ID / WA_APP_SECRET are used)
+      #   WA_FIRST_RUN=yes   ONCE, only if you want THIS service to apply the very first migrations (normally do that by hand), then delete it

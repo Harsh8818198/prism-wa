@@ -16,6 +16,9 @@ Optional, switching on the rest of the service:
   WA_LLM_BASE_URL     default https://api.groq.com/openai/v1
   WA_LLM_MODEL        default llama-3.3-70b-versatile
   LOG_LEVEL           INFO (default), DEBUG, WARNING...
+  WA_EMBEDDED_WORKER  yes: run the worker as a thread of this process (a host with no background-worker service; see embedded.py)
+  WA_MIGRATE_ON_START yes: apply missing migrations when the service starts (a host with no pre-deploy step; see migrate.py)
+  WA_FIRST_RUN        yes: allow that to be the very first thing to touch the database (0001-0003 change live CRM tables). Once, then remove.
 
 WA_ENV=prod switches on the checks a live service needs: the three secrets must be long enough to be secrets, and WA_INTERNAL_TOKEN and
 WA_TOKEN_KEYS must be set (without them the licence server cannot reach the gateway and no customer's Meta token can be kept). The process
@@ -28,7 +31,7 @@ import os
 
 import psycopg2
 
-from prism_wa import ai_agent, capi, embeddings, llm, media, media_store, payments
+from prism_wa import ai_agent, capi, embedded, embeddings, llm, media, media_store, migrate, payments
 from prism_wa.app import create_app
 from prism_wa.graph import Graph
 from prism_wa.vault import Vault
@@ -57,6 +60,10 @@ def configure_logging(env=None) -> None:
     env = os.environ if env is None else env
     level = (env.get("LOG_LEVEL") or "INFO").strip().upper()
     logging.basicConfig(level=level if level in logging.getLevelNamesMapping() else "INFO", format=LOG_FORMAT)
+
+
+def _yes(env, name: str) -> bool:
+    return (env.get(name) or "").strip().lower() in ("yes", "true", "1", "on")
 
 
 def is_production(env) -> bool:
@@ -93,14 +100,19 @@ def create_app_from_env(env=None):
         check_production(env, secrets, token)
     if env is os.environ and secrets:                                                          # the ads sign-in is the same Meta app as WhatsApp unless said otherwise
         os.environ.setdefault("META_APP_SECRET", secrets[0])
+    if _yes(env, "WA_MIGRATE_ON_START"):
+        migrate.apply_on_start(dsn, first_run=_yes(env, "WA_FIRST_RUN"))
     vault = Vault.from_env(env) if (env.get("WA_TOKEN_KEYS") or "").strip() else None
     ai_agent.configure(llm.from_env(env), embedder=embeddings.from_env(env))
     graph = Graph()
     payments.configure(vault)                                                                  # a flow that asks for payment needs the gateway's secret
     media.configure(graph=graph, vault=vault, store=media_store.from_env(env, connector(dsn)))   # the Media Library: a folder (WA_MEDIA_DIR) or the database
     capi.configure(graph=graph, vault=vault)                                                    # telling Meta what an ad earned
-    return create_app(app_secrets=secrets, verify_token=token, connect=connector(dsn),
-                      internal_token=env.get("WA_INTERNAL_TOKEN", "").strip(),
-                      app_id=env.get("WA_APP_ID", "").strip(),
-                      es_config_id=env.get("WA_ES_CONFIG_ID", "").strip(),
-                      graph=graph, vault=vault)
+    app = create_app(app_secrets=secrets, verify_token=token, connect=connector(dsn),
+                     internal_token=env.get("WA_INTERNAL_TOKEN", "").strip(),
+                     app_id=env.get("WA_APP_ID", "").strip(),
+                     es_config_id=env.get("WA_ES_CONFIG_ID", "").strip(),
+                     graph=graph, vault=vault)
+    if _yes(env, "WA_EMBEDDED_WORKER"):
+        embedded.attach(app, connector(dsn), graph=graph, vault=vault)
+    return app
