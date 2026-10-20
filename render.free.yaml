@@ -11,9 +11,10 @@
 #     runs: queued messages, scheduled campaigns, webhooks out and payment checks wait until the next request wakes it. Meta's webhook and the
 #     desktop app both wake it; Meta retries a webhook that was not answered in time and a repeat is harmless (it is stored once).
 #   * 750 free instance hours a month are shared by EVERY free service in the workspace, and when they run out Render suspends all of them until
-#     the next month. Do not keep this awake with a pinger while the licence server is also on the free tier: together they would use the hours up
-#     and the licence server (activation and renewal for every customer) would be suspended too.
-# So: good for finishing your tests and Meta's review, not for customers who expect a reply the second it is sent. Moving to the paid setup later
+#     the next month. A free scheduler (cron-job.org) can hit /healthz every 10 minutes to stop the sleep, but ONLY in working hours (for example
+#     09:00-19:00 India time, Monday-Saturday, about 260 hours): around the clock it would use ~744 hours by itself and the licence server (activation
+#     and renewal for every customer) would be suspended with it.
+# So: good for finishing your tests, Meta's review and a first few customers in working hours; not for customers who expect an instant reply at 3 a.m. Moving to the paid setup later
 # changes nothing in the database or in Meta: delete this service, create render.yaml's two, set the same variables.
 #
 # The database is the same Supabase Postgres as the licence server (the WhatsApp tables sit beside the CRM tables): DATABASE_URL is Supabase ->

@@ -105,8 +105,12 @@ applies migrations when the service starts (`WA_MIGRATE_ON_START`). It is the sa
 * Steps 5–8 are the same. The service is called `prism-wa`, so its address is `https://prism-wa.onrender.com` (or with a suffix if the name is taken).
 * **A free service sleeps** after 15 minutes without a request and takes about a minute to wake. While asleep nothing is sent or scheduled; the next
   webhook or request wakes it and the backlog goes out. `/readyz` shows `"worker": "stale"` while it has been asleep.
-* **Do not keep it awake with a pinger** while the licence server is also free: the 750 free hours a month are shared by the whole workspace, and when they run
-  out Render suspends every free service until next month, the licence server included.
+* **Keeping it awake in working hours (free).** A scheduler such as cron-job.org (free) can visit `https://<your service>/healthz` every 10 minutes, which
+  stops the sleep. Do it **only in working hours**, never 24 hours a day: the 750 free hours a month are shared by every free service in the workspace, and
+  when they run out Render suspends all of them until the next month, the licence server included (nobody could activate or renew). Example: every 10
+  minutes from 09:00 to 19:00 India time, Monday to Saturday, is about 260 hours, which leaves room for the licence server if it is also free. Outside
+  those hours the service sleeps and the next Meta webhook or app request wakes it (a customer who writes at night waits about a minute for the wake).
+  Look at Render's billing page now and then to see how many free hours the workspace has used.
 * **Moving to paid later** changes nothing in the database or in Meta: delete this service, create the two in `render.yaml`, set the same variables
   (and remove `WA_EMBEDDED_WORKER` / `WA_MIGRATE_ON_START`; never run the worker in both places).
 
