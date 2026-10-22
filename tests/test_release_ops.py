@@ -330,3 +330,28 @@ def test_migrating_at_start_applies_everything_once_it_is_allowed_and_then_has_n
 def test_migrating_at_start_is_not_done_unless_asked(legacy):
     gateway.create_app_from_env(good_env(DATABASE_URL=legacy.dsn))
     assert legacy.one("select to_regclass('public.wa_schema_migrations')") is None
+
+
+# ── the three blueprint files must not drift apart ────────────────────────────────────────────────────────────────────────────────────────
+
+def test_the_three_blueprints_agree_on_what_they_must():
+    import yaml
+    docs = {n: yaml.safe_load((ROOT / n).read_text(encoding="utf-8")) for n in ("render.yaml", "render.free.yaml", "render.single.yaml")}
+
+    def env(svc):
+        return {e["key"]: e for e in svc["envVars"]}
+
+    def asked_for(svc):
+        return {k for k, v in env(svc).items() if v.get("sync") is False}
+    paid_gateway, paid_worker = docs["render.yaml"]["services"]
+    free, single = docs["render.free.yaml"]["services"][0], docs["render.single.yaml"]["services"][0]
+    assert (paid_gateway["type"], paid_worker["type"]) == ("web", "worker")
+    assert "WA_EMBEDDED_WORKER" not in env(paid_gateway)                           # the worker is its own service there: it must never also run inside the gateway
+    assert len(docs["render.free.yaml"]["services"]) == len(docs["render.single.yaml"]["services"]) == 1
+    assert free["plan"] == "free" and single["plan"] == "0.5c-512mb"               # free is free; the $7 one is the smallest paid size
+    for svc in (free, single):
+        assert env(svc)["WA_ENV"]["value"] == "prod" and env(svc)["WA_EMBEDDED_WORKER"]["value"] == "yes"
+        assert svc["healthCheckPath"] == "/healthz" and svc["runtime"] == "docker" and svc["region"] == "singapore"
+    assert asked_for(free) == asked_for(single) == asked_for(paid_gateway)         # the same secrets are asked for in all three
+    assert env(free)["WA_MIGRATE_ON_START"]["value"] == "yes" and "preDeployCommand" not in free         # no pre-deploy step on the free tier: it migrates at start
+    assert single["preDeployCommand"] == "python db/apply.py --pending" and "WA_MIGRATE_ON_START" not in env(single)      # the paid one migrates BEFORE going live

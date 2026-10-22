@@ -3,7 +3,7 @@
 Prism's WhatsApp platform: the service behind the WhatsApp add-on in the Prism desktop app (replacing AiSensy). The desktop app never talks to it
 directly: it asks the licence server (`prism-license-server`, `/v1/whatsapp/p/<area>/<action>`), which decides who may ask and forwards the call here.
 Plan: `prism_gui/docs/WHATSAPP_PLATFORM_SPEC.md`. What was built against AiSensy, tab by tab: `prism_gui/docs/WHATSAPP_TAB_GAP_ANALYSIS.md`.
-**How to put it live on Render: `DEPLOY.md`** (paid: two services, `render.yaml`; free: one service, `render.free.yaml`).
+**How to put it live on Render: `DEPLOY.md`** (one paid service, $7: `render.single.yaml`; two paid services: `render.yaml`; free: `render.free.yaml`).
 
 **Status (19-Oct-2026): built, tested against a real Postgres with fake Meta, Razorpay, LLM and sign-in providers, and ready to deploy.
 Not yet run against Meta, Razorpay or a real identity provider: `DEPLOY.md` ends with the exact list of what is unproven live.**

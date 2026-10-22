@@ -3,3 +3,5 @@
 pytest>=8
 # TestClient's transport (the gateway tests).
 httpx>=0.25
+# the blueprint files are checked against each other (tests/test_release_ops.py).
+pyyaml>=6

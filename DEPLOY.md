@@ -95,6 +95,21 @@ payment and sign-in callbacks and the connection-pool fix). Then `https://<licen
 **Going back.** Unset `PRISM_WA_URL` on the licence server and the app is on n8n again, with no deploy. The migrations only add things, so rolling
 the code back to an older deploy is safe too.
 
+## The one-service option ($7 a month)
+
+`render.single.yaml` is the free option on a paid size: ONE web service (0.5 CPU, 512 MB) that is both the gateway and the worker. It is what to use for the
+first paying customers.
+
+* Do steps 1–3 as written (GitHub, secrets, the first migration by hand). In step 4 use **Blueprints → New Blueprint Instance**, pick the repository and set
+  **Blueprint Path** to `render.single.yaml`. You fill in seven variables. Render shows $7 a month.
+* Steps 5–8 are the same. The service is called `prism-wa`, so its address is `https://prism-wa.onrender.com` (or with a suffix if the name is taken).
+* **Always on:** it never sleeps, so you need no pinger. A paid service uses none of the 750 free hours a month shared by the free services of the workspace.
+  Deploys have no downtime, and the migration step runs before the new version goes live: a failure leaves the old one serving.
+* **How much it carries:** roughly 3–5 small business customers (about 500–1,500 incoming messages an hour; a broadcast of 1,000 people in a couple of minutes).
+  The limit is the distance to the database (Supabase is in Sydney), not the CPU. When replies start arriving minutes late after a busy burst, give the
+  worker its own service: delete this one and use `render.yaml` (two services, $14). Never run both; and the biggest speed-up of all is moving the Supabase
+  project to Singapore.
+
 ## The free option (one service, no cost)
 
 Render's free tier has web services but no background workers, so `render.free.yaml` runs the worker as a thread of the gateway (`WA_EMBEDDED_WORKER`) and
