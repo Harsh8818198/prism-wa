@@ -7,8 +7,8 @@
 # Cost: a web service and a background worker on Render's paid tier (the free tier sleeps, and Meta gives up on a webhook that is not answered
 # quickly; a sleeping worker sends nothing). `plan` is left out so Render uses its default paid size; raise it in the dashboard when traffic needs it.
 #
-# The database is the same Supabase Postgres the licence server uses (the WhatsApp tables sit beside the CRM tables), so there is no `databases:`
-# block. DATABASE_URL is Supabase -> Connect -> **Session pooler** (port 5432), exactly as for the licence server. Not the transaction pooler (6543).
+# The database is prism-wa's OWN Supabase project, new and empty (DEPLOY.md step 3A), so there is no `databases:` block. DATABASE_URL is that project's
+# Connect -> **Session pooler** (port 5432), set by hand in the dashboard.
 services:
   - type: web
     name: prism-wa-gateway

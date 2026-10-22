@@ -46,22 +46,25 @@ create table if not exists wa_platform_config (
 );
 alter table wa_platform_config enable row level security;
 
--- CHANGE 'orena' HERE if your own business's tenant row has another slug
--- (select id, slug, name from tenants; — preflight.sql lists them).
+-- The slug of the tenant that owns today's rows is 'orena' unless the runner says otherwise: db/apply.py sets the session setting wa.legacy_slug from
+-- the environment variable WA_LEGACY_TENANT. Use another slug if your own business's tenant row has one (select id, slug, name from tenants; —
+-- preflight.sql lists them). Use 'none' on a NEW project with no old writers: no tenant is made, and every row must name its workspace (strict mode).
 do $$
 declare
-  legacy_slug constant text := 'orena';
+  legacy_slug text := coalesce(nullif(current_setting('wa.legacy_slug', true), ''), 'orena');
   legacy_id   uuid;
 begin
-  insert into tenants (slug, name) values (legacy_slug, 'Orena')
-    on conflict (slug) do nothing;
-  select id into legacy_id from tenants where slug = legacy_slug;
-  -- Legacy writers (the n8n CRM flows) do not send a tenant. Rows they create
-  -- are attributed to this tenant. Delete this config row to make tenant_id
-  -- mandatory for every writer ("strict mode") once they all send it.
-  insert into wa_platform_config (key, value)
-    values ('legacy_default_tenant', legacy_id::text)
-    on conflict (key) do nothing;
+  if legacy_slug <> 'none' then
+    insert into tenants (slug, name) values (legacy_slug, initcap(legacy_slug))
+      on conflict (slug) do nothing;
+    select id into legacy_id from tenants where slug = legacy_slug;
+    -- Legacy writers (the n8n CRM flows) do not send a tenant. Rows they create
+    -- are attributed to this tenant. Delete this config row to make tenant_id
+    -- mandatory for every writer ("strict mode") once they all send it.
+    insert into wa_platform_config (key, value)
+      values ('legacy_default_tenant', legacy_id::text)
+      on conflict (key) do nothing;
+  end if;
 end $$;
 
 create or replace function wa_default_tenant() returns uuid
@@ -124,7 +127,12 @@ do $$
 declare legacy uuid := wa_default_tenant();
 begin
   if legacy is null then
-    raise exception '0001_tenancy: no legacy default tenant configured';
+    -- strict mode (WA_LEGACY_TENANT=none, a new empty project): fine while no row needs a tenant; if one does, there is nobody to give it to.
+    if exists (select 1 from contacts where tenant_id is null) or exists (select 1 from segments where tenant_id is null)
+       or exists (select 1 from campaigns where tenant_id is null) then
+      raise exception '0001_tenancy: some rows have no tenant and no legacy default tenant is configured: set WA_LEGACY_TENANT to the slug of the tenant that owns them';
+    end if;
+    return;
   end if;
   update contacts      set tenant_id = legacy where tenant_id is null;
   update conversations c set tenant_id = k.tenant_id

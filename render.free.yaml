@@ -17,9 +17,9 @@
 # So: good for finishing your tests, Meta's review and a first few customers in working hours; not for customers who expect an instant reply at 3 a.m. Moving to the paid setup later
 # changes nothing in the database or in Meta: delete this service, create render.yaml's two, set the same variables.
 #
-# The database is the same Supabase Postgres as the licence server (the WhatsApp tables sit beside the CRM tables): DATABASE_URL is Supabase ->
-# Connect -> **Session pooler** (port 5432). Do the first migration by hand first (DEPLOY.md step 3): this service REFUSES to be the first to touch
-# the CRM tables and says so in its log.
+# The database is prism-wa's OWN Supabase project, new and empty (DEPLOY.md step 3A; region Singapore, next to Render): DATABASE_URL is that project's
+# Connect -> **Session pooler** (port 5432). Do the first migration by hand first (DEPLOY.md step 3): the first run REFUSES to touch a database whose tables
+# are not what it expects, and the deploy stops there (an existing version, if any, keeps serving).
 services:
   - type: web
     name: prism-wa

@@ -2,10 +2,12 @@
 missing (and refuse to be the first), secrets that must be strong, and the post-deploy smoke test itself."""
 import json
 import os
+import re
 import socket
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -451,3 +453,66 @@ def test_the_backup_script_copies_what_the_first_migrations_change_leaves_the_or
     assert legacy.one("select count(*) from bak_tenants") == before["tenants"]
     report = sql.split("-- What was copied", 1)[1].split("\n", 1)[1]
     legacy.q("explain " + report)                                                            # the report under it is at least valid SQL (it cannot RUN without libxml)
+
+
+# ── a NEW, EMPTY Supabase project: the baseline, then the migrations, with no tenant invented ────────────────────────────────────────────────
+
+@pytest.fixture
+def fresh(admin_dsn_for):
+    """A database that has only what a new Supabase project has (the API roles and the default privileges), nothing of the old CRM."""
+    import conftest as cf
+    import pg
+    name = pg.DB_PREFIX + "fresh_" + uuid.uuid4().hex[:8]
+    cf._create_db(admin_dsn_for, name)
+    db = cf.Db(admin_dsn_for, name)
+    db.q(cf._read("supabase_stubs.sql"))
+    yield db
+    db.close()
+    cf._drop_db(admin_dsn_for, name)
+
+
+BASELINE = ROOT / "db" / "baseline" / "0000_fresh_project.sql"
+
+
+def test_the_baseline_creates_exactly_the_old_crm_base_tables_the_tests_run_against_and_no_data():
+    text = BASELINE.read_text(encoding="utf-8")
+    fixtures = ROOT / "tests" / "fixtures"
+    expected = set(re.findall(r"create table if not exists (\w+)", (fixtures / "legacy_schema.sql").read_text(encoding="utf-8"), re.I)) | {"tenants"}
+    assert set(re.findall(r"create table if not exists (\w+)", text, re.I)) == expected
+    assert not re.search(r"insert\s+into", text, re.I)                                                 # no seed row: no Shakti, no Orena, nobody's data
+
+
+def test_a_new_empty_project_can_be_set_up_with_the_baseline_then_the_migrations_and_has_no_tenant_until_you_make_one(fresh, monkeypatch):
+    fresh.q(BASELINE.read_text(encoding="utf-8"))
+    fresh.q(BASELINE.read_text(encoding="utf-8"))                                                       # safe to run twice
+    for t in ("users", "contacts", "leads", "tenants", "settings"):                                      # locked against the public Supabase key
+        assert fresh.one("select relrowsecurity from pg_class where relname = %s", (t,)) is True
+        assert fresh.one("select has_table_privilege('anon', %s, 'select')", (t,)) is False
+    monkeypatch.setenv("WA_LEGACY_TENANT", "none")
+    conn = psycopg2.connect(fresh.dsn)
+    first = migrations.apply_pending(conn, first_run=True)
+    assert len(first) == len(migrations.migration_files())
+    conn.close()
+    assert fresh.one("select count(*) from tenants") == 0                                                # no 'orena', no one
+    assert fresh.one("select wa_default_tenant()") is None                                               # strict: a row must name its workspace
+    with pytest.raises(psycopg2.errors.NotNullViolation):
+        fresh.q("insert into contacts (name, phone) values ('Nobody', '919800000001')")
+    tenant = fresh.one("insert into tenants (slug, name) values ('acme', 'Acme') returning id")
+    fresh.q("insert into contacts (tenant_id, name, phone) values (%s, 'Asha', '919800000001')", (tenant,))
+    assert health.readiness(connect_to(fresh))[1]["schema"] == "current"
+
+
+def test_without_the_setting_the_old_tenant_is_still_orena_and_a_named_one_is_used_as_given(legacy, make_db, monkeypatch):
+    monkeypatch.delenv("WA_LEGACY_TENANT", raising=False)
+    conn = psycopg2.connect(legacy.dsn)
+    migrations.apply_pending(conn, first_run=True)
+    conn.close()
+    assert legacy.one("select name from tenants where slug = 'orena'") == "Orena"                        # unchanged behaviour for an existing project
+    other = make_db("live")
+    monkeypatch.setenv("WA_LEGACY_TENANT", "Acme")
+    conn = psycopg2.connect(other.dsn)
+    migrations.apply_pending(conn, first_run=True)
+    conn.close()
+    assert other.one("select name from tenants where slug = 'acme'") == "Acme"
+    assert other.one("select count(*) from tenants where slug = 'orena'") == 0
+    assert other.one("select value from wa_platform_config where key = 'legacy_default_tenant'") == str(other.one("select id from tenants where slug = 'acme'"))

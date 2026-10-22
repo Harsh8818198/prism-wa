@@ -6,6 +6,9 @@
     python db/apply.py --pending --first-run --adopt          ...and the tables it would create already exist because an earlier run of these files was applied by hand
     python db/apply.py --status                               what is applied and what is waiting; changes nothing
 
+WA_LEGACY_TENANT (environment): the slug of the tenant that owns the rows already in the old CRM tables ('orena' if unset), or 'none' on a NEW project
+with no old writers (db/baseline/0000_fresh_project.sql): no tenant is invented and every row must name its workspace. Read by 0001 only.
+
 Each file is idempotent and runs as one implicit transaction (a multi-statement
 simple query is atomic in Postgres), so a failure leaves the database exactly
 as it was. There is deliberately no BEGIN/COMMIT inside the files: they must
@@ -82,6 +85,13 @@ def _sha(sql: str) -> str:
     return hashlib.sha256(sql.encode("utf-8")).hexdigest()
 
 
+def _session(conn) -> None:
+    """Tell the migrations which tenant owns the old rows (WA_LEGACY_TENANT; see the top of this file). A setting on THIS connection, read by 0001."""
+    with conn.cursor() as cur:
+        cur.execute("select set_config('wa.legacy_slug', %s, false)", ((os.environ.get("WA_LEGACY_TENANT") or "").strip().lower(),))
+    conn.commit()
+
+
 def _record(cur, path: Path, sql: str) -> None:
     cur.execute(_TRACK)
     cur.execute(
@@ -95,6 +105,7 @@ def apply_all(conn, upto: str = "") -> list:
     """Apply every migration (or those up to and including `upto`, a file
     stem such as '0002_identity'). Returns the names applied."""
     applied = []
+    _session(conn)
     for path in migration_files():
         sql = path.read_text(encoding="utf-8")
         with conn.cursor() as cur:
@@ -131,6 +142,7 @@ def apply_pending(conn, *, first_run: bool = False, adopt: bool = False) -> list
     with conn.cursor() as cur:
         cur.execute("select pg_advisory_lock(hashtext(%s))", (LOCK_KEY,))
     conn.commit()
+    _session(conn)
     try:
         todo = pending(conn)
         if not todo:

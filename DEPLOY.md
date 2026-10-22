@@ -2,7 +2,7 @@
 
 Two things run: the **gateway** (a web service: Meta's webhooks, the licence server's calls, the connect page, the public API) and the **worker**
 (a background service: sends queued messages, runs campaigns, delivers webhooks, checks payments, answers for AI agents). Both are built from the
-one `Dockerfile`. The database is the Supabase Postgres the licence server already uses — the WhatsApp tables sit beside the CRM tables.
+one `Dockerfile`. The database is a Supabase project of its own (Step 3).
 
 Cost: Render's paid tier for both (a web service and a background worker; about the price of two small instances). Not the free tier: it sleeps,
 Meta gives up on a webhook that is not answered quickly, and a sleeping worker sends nothing.
@@ -30,9 +30,40 @@ It prints three lines. Nothing is stored or sent. Put them in a password manager
 | `WA_TOKEN_KEYS` | encrypts every customer's Meta token | **every stored token becomes unreadable and every customer must reconnect.** Keep a copy that is not Render and not the database |
 
 You also need: `WA_APP_SECRET` and `WA_APP_ID` (developers.facebook.com → your app → App settings → Basic) and `DATABASE_URL` (Supabase → Connect →
-**Session pooler**, port 5432 — the same kind of string the licence server uses; never the transaction pooler on 6543).
+**Session pooler**, port 5432, of prism-wa's own Supabase project (Step 3 makes it); never the transaction pooler on 6543).
 
 ## Step 3 — The database, once, by hand
+
+prism-wa keeps its data in a Supabase project **of its own**. Never in the licence server's project (it holds every customer's licence) and never in another
+business's (for example the old Orena CRM). No deploy ever does this step first.
+
+### 3A. A new, empty project (use this)
+
+1. supabase.com → your organisation → **New project**: name `prism-wa`, region **Southeast Asia (Singapore)** (next to Render: every query is about 20–50 times faster
+   than from Sydney), plan **Free**. Choose a strong database password and keep it in your password manager. The free plan allows 2 *active* projects (paused ones
+   do not count) and pauses a project after a week of no use; prism-wa's worker talks to the database all day, which counts as use, but look at it after the first
+   weeks, or move it to Pro ($25).
+2. In the new project open the **SQL editor**, paste the whole of `db/baseline/0000_fresh_project.sql` and run it. It creates the base tables prism-wa builds on
+   (no data, no tenant) and locks them against the public Supabase keys.
+3. Project → **Connect** → *Session pooler* (port 5432). That string is `DATABASE_URL`.
+4. From your machine, in the prism-wa folder (the connection string comes from the environment, so it is not in your shell history):
+
+        $env:DATABASE_URL = "<that string>"      (PowerShell; in bash: export DATABASE_URL=...)
+        $env:WA_LEGACY_TENANT = "none"
+        python db/apply.py --status
+        python db/apply.py --pending --first-run
+
+   `none` means there is no old writer: no tenant is invented and every row must name its workspace. `--status` should list all 29 as "waiting" and say
+   "name collisions: none".
+5. Make the first workspace (a customer), in the SQL editor: `insert into tenants (slug, name) values ('acme', 'Acme Co') returning id;`. That id is what a
+   licence is linked to in step 8. There is nothing to back up: the project is empty.
+
+From then on every deploy runs `python db/apply.py --pending` by itself (the blueprint's pre-deploy step, or at start-up on the free tier): it applies only what the
+database has not got, and if a migration fails the old version keeps serving.
+
+### 3B. An existing project that already has the old CRM tables (only if you must)
+
+For a database that already holds a CRM (`tenants`, `contacts`, `conversations`, `messages`, `leads`…) and that you are sure belongs to you.
 
 The database is the Supabase project the licence server and the CRM already use, so this step is done with care and by hand; no deploy ever does it first.
 The first migrations (0001–0003) change the live CRM tables. Nothing is deleted, but do these in order:
@@ -52,7 +83,7 @@ From then on every deploy runs `python db/apply.py --pending` by itself: it appl
 version keeps serving. (If you ever put the running service on Supabase's transaction pooler, port 6543, give migrations their own connection with
 `WA_MIGRATE_DATABASE_URL` set to the session pooler, port 5432.)
 
-### What the first migration does to everything else that uses this database
+#### What the first migration does to everything else that uses this database
 
 Checked against the other Prism services' code and tables (22-Oct-2026):
 
@@ -69,7 +100,10 @@ Checked against the other Prism services' code and tables (22-Oct-2026):
   transaction pooler (port 6543) and set `WA_MIGRATE_DATABASE_URL` for migrations.
 * **Undoing it.** `db/rollback/0001_0003_down.sql` removes the enforcement and keeps every row; the `bak_*` copies from step 2 are the safety net.
 
-## Step 4 — Create the two services
+## Step 4 — Create the service (or services)
+
+Pick one blueprint: **`render.single.yaml`** (one paid service, $7 a month: the one to use for the first paying customers), `render.free.yaml` (one free
+service, sleeps; see "The free option") or `render.yaml` (two paid services, $14: gateway and worker apart). Set it as the **Blueprint Path**.
 
 Render dashboard → **workspace home** (not inside a project page) → **New → Blueprint** → pick the `prism-wa` repository. Render reads `render.yaml`
 and asks for each value marked `sync: false`. Put it in the **Prism** project beside the licence server. Fill in:
@@ -213,7 +247,8 @@ else); read them before you run it. It adds a column to `agents` (`email`), `pho
 | `LOG_LEVEL` | `INFO` (default), `DEBUG`, `WARNING` | optional |
 | `WA_EMBEDDED_WORKER`, `WA_MIGRATE_ON_START` | `yes` runs the worker inside the gateway, and applies missing migrations when it starts: for a host with no background-worker service or pre-deploy step (the free option below) | `render.free.yaml` sets them |
 | `WA_MIGRATE_DATABASE_URL` | optional: the connection migrations use (Supabase session pooler, port 5432) when `DATABASE_URL` is the transaction pooler (6543) | only if you switch pooler |
-| `WA_SEND_CONCURRENCY` | messages sent at once, 1–16 (default 4). Each takes a database connection for a moment and the database is shared with the licence server | optional |
+| `WA_SEND_CONCURRENCY` | messages sent at once, 1–16 (default 4). Each takes a database connection for a moment (if the database is ever shared with another service, it keeps their share free) | optional |
+| `WA_LEGACY_TENANT` | read by the first migration only: `none` on a new project with no old writers (Step 3A); unset = `orena`, the old CRM's tenant (Step 3B) | Step 3 |
 | `WA_FIRST_RUN` | `yes` lets a deploy's migration step be the first to touch a database (see step 3). Normally not used: run `--first-run` by hand | optional, once |
 | `PRISM_WA_URL`, `PRISM_WA_INTERNAL_TOKEN`, `THREADPOOL_SIZE` (licence server) | where the licence server finds this service, the shared secret, and how many requests it works on at once (default 100) | see step 7 |
 | `WA_APP_ID`, `WA_ES_CONFIG_ID` | for the connect page | Meta dashboard (Embedded Signup configuration) |

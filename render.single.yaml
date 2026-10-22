@@ -14,9 +14,9 @@
 # after a busy burst, give the worker its own service: delete this one and use render.yaml (two services). NEVER run both: the worker would be
 # started twice (harmless but wasteful), so render.yaml does not set WA_EMBEDDED_WORKER.
 #
-# The database is the same Supabase Postgres as the licence server (the WhatsApp tables sit beside the CRM tables): DATABASE_URL is Supabase ->
-# Connect -> **Session pooler** (port 5432). Do the first migration by hand first (DEPLOY.md step 3): the pre-deploy step REFUSES to be the first to
-# touch the CRM tables, and the deploy stops there (the old version, if any, keeps serving).
+# The database is prism-wa's OWN Supabase project, new and empty (DEPLOY.md step 3A; region Singapore, next to Render): DATABASE_URL is that project's
+# Connect -> **Session pooler** (port 5432). Do the first migration by hand first (DEPLOY.md step 3): the first run REFUSES to touch a database whose tables
+# are not what it expects, and the deploy stops there (an existing version, if any, keeps serving).
 services:
   - type: web
     name: prism-wa
