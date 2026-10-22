@@ -124,7 +124,9 @@ def test_a_database_set_up_by_hand_needs_the_flag_once_then_records_itself(migra
     conn = psycopg2.connect(migrated.dsn)
     with pytest.raises(migrations.FirstRunRefused):
         migrations.apply_pending(conn)
-    assert len(migrations.apply_pending(conn, first_run=True)) == len(migrations.migration_files())
+    with pytest.raises(migrations.FirstRunRefused, match="already exist"):                  # the tables are there: from an earlier run of these files, or someone else's?
+        migrations.apply_pending(conn, first_run=True)
+    assert len(migrations.apply_pending(conn, first_run=True, adopt=True)) == len(migrations.migration_files())     # the owner says they are from an earlier hand-run
     conn.close()
 
 
@@ -355,3 +357,97 @@ def test_the_three_blueprints_agree_on_what_they_must():
     assert asked_for(free) == asked_for(single) == asked_for(paid_gateway)         # the same secrets are asked for in all three
     assert env(free)["WA_MIGRATE_ON_START"]["value"] == "yes" and "preDeployCommand" not in free         # no pre-deploy step on the free tier: it migrates at start
     assert single["preDeployCommand"] == "python db/apply.py --pending" and "WA_MIGRATE_ON_START" not in env(single)      # the paid one migrates BEFORE going live
+
+
+# ── the database is shared with other Prism services: never quietly adopt someone else's table ──────────────────────────────────────────────
+
+# Tables other Prism services keep in the SAME database. Keep in step with prism-license-server/app/models.py (every __tablename__) and the legacy CRM.
+FOREIGN_TABLES = {"audit_log", "credit_ledger", "credit_offers", "credit_rates", "credit_requests", "customers", "device_sightings", "devices", "leads_calls",
+                  "licenses", "payloads", "usage_events", "alembic_version",
+                  "tenants", "contacts", "conversations", "messages", "leads", "follow_up_queue", "activity_log", "tasks", "users", "settings"}
+
+
+def test_no_table_prism_wa_creates_has_the_name_of_one_that_another_prism_service_keeps_there():
+    taken = sorted(set(migrations.created_tables()) & FOREIGN_TABLES)
+    assert taken == [], "these would silently adopt another service's table: %s" % taken               # audit_log was one: the licence server's is called that
+
+
+def test_the_first_run_refuses_when_a_table_it_would_create_already_belongs_to_someone_else(legacy):
+    legacy.q("create table orders (id serial primary key, total numeric)")                              # e.g. the CRM's own
+    conn = psycopg2.connect(legacy.dsn)
+    with pytest.raises(migrations.FirstRunRefused, match="orders"):
+        migrations.apply_pending(conn, first_run=True)
+    assert migrations.collisions(conn) == ["orders"]
+    conn.close()
+    assert legacy.one("select to_regclass('public.wa_schema_migrations')") is None                    # nothing was changed
+    assert legacy.one("select to_regclass('public.wa_platform_config')") is None
+
+
+def test_the_two_tables_shared_by_design_are_not_collisions(legacy):
+    conn = psycopg2.connect(legacy.dsn)
+    assert migrations.collisions(conn) == []
+    legacy.q("create table segments (id serial primary key, name text)")
+    legacy.q("create table campaigns (id serial primary key, name text)")
+    assert migrations.collisions(conn) == []
+    conn.close()
+
+
+def test_the_status_report_names_collisions_before_anything_is_applied(legacy, capsys):
+    legacy.q("create table products (id serial primary key)")
+    assert migrations.main(["apply.py", "--status", legacy.dsn]) == 0
+    assert "name collisions: products" in capsys.readouterr().out
+
+
+def _preflight_fragment():
+    text = (ROOT / "db" / "preflight.sql").read_text(encoding="utf-8")
+    start = text.index("'name_collisions', ") + len("'name_collisions', ")
+    return text[start:text.index(",\n  'postgres_version'")]
+
+
+def test_preflight_reports_the_same_collisions_and_lists_every_table_the_migrations_create(legacy):
+    frag = _preflight_fragment()
+    listed = set(__import__("re").findall(r"'(\w+)'", frag.split("unnest(array[", 1)[1].split("]", 1)[0]))
+    assert listed == set(migrations.created_tables()) - set(migrations.SHARED_BY_DESIGN)                   # a new table must be added to the preflight too
+    assert legacy.one("select %s" % frag) == []                                                          # a database that never had prism-wa: nothing taken
+    legacy.q("create table orders (id serial primary key)")
+    legacy.q("create table flows (id serial primary key)")
+    assert legacy.one("select %s" % frag) == ["flows", "orders"]
+
+
+# ── the database and its connections are SHARED with the licence server ──────────────────────────────────────────────────────────────────────
+
+def test_messages_are_sent_four_at_a_time_unless_told_otherwise(monkeypatch):
+    from prism_wa import send as send_module
+    monkeypatch.delenv("WA_SEND_CONCURRENCY", raising=False)
+    assert send_module._default_concurrency() == 4
+    for given, want in (("2", 2), ("99", 16), ("0", 1), ("many", 4), ("", 4)):
+        monkeypatch.setenv("WA_SEND_CONCURRENCY", given)
+        assert send_module._default_concurrency() == want, given
+
+
+def test_migrations_use_their_own_connection_string_when_given_and_the_service_keeps_its_own(legacy, monkeypatch, capsys):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://127.0.0.1:1/none")                      # the service's (could be the transaction pooler): unreachable here
+    monkeypatch.setenv("WA_MIGRATE_DATABASE_URL", legacy.dsn)
+    assert migrations.main(["apply.py", "--status"]) == 0                                    # the runner used the migration string
+    assert "name collisions: none" in capsys.readouterr().out
+    gateway.create_app_from_env(good_env(DATABASE_URL="postgresql://127.0.0.1:1/none", WA_MIGRATE_ON_START="yes", WA_FIRST_RUN="yes",
+                                         WA_MIGRATE_DATABASE_URL=legacy.dsn))                # ...and so did the start-up migration
+    assert health.readiness(connect_to(legacy))[1]["schema"] == "current"
+
+
+def test_the_backup_script_copies_what_the_first_migrations_change_leaves_the_originals_alone_and_locks_the_copies(legacy):
+    sql = (ROOT / "db" / "backup_before_first_run.sql").read_text(encoding="utf-8")
+    block = sql.split("-- What was copied", 1)[0]                                            # (the report under it needs libxml, which a minimal Postgres lacks)
+    legacy.q("insert into tenants (slug, name) values ('acme', 'Acme'), ('beta', 'Beta')")
+    before = {t: legacy.one("select count(*) from %s" % t) for t in ("tenants", "contacts", "conversations", "messages", "leads")}
+    legacy.q(block)
+    for t, n in before.items():
+        assert legacy.one("select count(*) from bak_%s" % t) == n, t
+        assert legacy.one("select count(*) from %s" % t) == n                               # the originals are untouched
+        assert legacy.one("select relrowsecurity from pg_class where relname = 'bak_%s'" % t) is True
+        assert legacy.one("select has_table_privilege('anon', 'bak_%s', 'select')" % t) is False        # not reachable with the public key
+    legacy.q("insert into tenants (slug, name) values ('later', 'Later')")
+    legacy.q(block)                                                                          # run again: the FIRST copy is kept
+    assert legacy.one("select count(*) from bak_tenants") == before["tenants"]
+    report = sql.split("-- What was copied", 1)[1].split("\n", 1)[1]
+    legacy.q("explain " + report)                                                            # the report under it is at least valid SQL (it cannot RUN without libxml)

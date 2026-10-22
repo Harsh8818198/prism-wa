@@ -4,7 +4,7 @@
 --
 -- It answers: which tenants exist, which of the tables the migrations need are
 -- there, how many rows have no tenant, and whether anything would collide when
--- uniqueness becomes per-tenant.
+-- uniqueness becomes per-tenant, and whether any table prism-wa wants to create already exists under that name (name_collisions: must be []).
 
 with
 col as (
@@ -53,5 +53,76 @@ select jsonb_pretty(jsonb_build_object(
       then (xpath('/row/c/text()', query_to_xml(
              'select count(*) as c from (select 1 from public.segments group by lower(name) having count(*) > 1) d',
              false, true, '')))[1]::text::bigint end,
+  -- Tables prism-wa would create that ALREADY exist here. This must be [] on a database that never had prism-wa: anything listed belongs to another
+  -- Prism service (the licence server's tables, the CRM) and must be renamed in the migration BEFORE they are applied.
+  'name_collisions', (select coalesce(jsonb_agg(t order by t), '[]'::jsonb)
+                        from unnest(array['wa_platform_config',
+                                  'contact_identities',
+                                  'contact_identity_audit',
+                                  'wabas',
+                                  'phone_numbers',
+                                  'wa_events',
+                                  'wa_jobs',
+                                  'outbox',
+                                  'templates',
+                                  'attribute_defs',
+                                  'contact_attributes',
+                                  'consent_ledger',
+                                  'tenant_settings',
+                                  'segment_members',
+                                  'campaign_recipients',
+                                  'short_links',
+                                  'click_events',
+                                  'agents',
+                                  'conversation_events',
+                                  'conversation_notes',
+                                  'canned_messages',
+                                  'api_keys',
+                                  'integrations',
+                                  'integration_events',
+                                  'cart_checkouts',
+                                  'ad_accounts',
+                                  'ads',
+                                  'flows',
+                                  'flow_versions',
+                                  'flow_runs',
+                                  'ai_agents',
+                                  'ai_knowledge',
+                                  'ai_chunks',
+                                  'ai_usage',
+                                  'campaign_schedules',
+                                  'tag_defs',
+                                  'import_log',
+                                  'contact_events',
+                                  'media_assets',
+                                  'media_blobs',
+                                  'webhook_endpoints',
+                                  'webhook_deliveries',
+                                  'flow_run_steps',
+                                  'ai_gaps',
+                                  'ai_events',
+                                  'autos',
+                                  'auto_log',
+                                  'auto_enrolments',
+                                  'ad_audiences',
+                                  'ad_connect_states',
+                                  'ad_suggestions',
+                                  'commerce_config',
+                                  'products',
+                                  'orders',
+                                  'payments',
+                                  'refunds',
+                                  'forms',
+                                  'form_responses',
+                                  'flow_keys',
+                                  'wa_audit_log',
+                                  'tenant_branding',
+                                  'sso_config',
+                                  'sso_states',
+                                  'sso_sessions',
+                                  'partner_invites',
+                                  'tenant_parent',
+                                  'commission_ledger']) as t
+                       where to_regclass('public.' || t) is not null),
   'postgres_version', current_setting('server_version')
 ));

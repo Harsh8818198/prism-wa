@@ -23,6 +23,7 @@ Errors are classified (Meta's table, spec WS3):
 from __future__ import annotations
 
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -286,13 +287,24 @@ def _body(item: dict) -> dict:
     return body
 
 
+def _default_concurrency() -> int:
+    """How many messages are sent at once. Each one opens a database connection for a moment when it finishes, and the database is SHARED with the
+    licence server, whose slots must never run out because a broadcast went out: Supabase's session pooler allows about 15 connections in all. 4 is
+    plenty for a few customers (several messages a second); WA_SEND_CONCURRENCY changes it (1-16)."""
+    try:
+        return max(1, min(int(os.environ.get("WA_SEND_CONCURRENCY") or 4), 16))
+    except ValueError:
+        return 4
+
+
 def send_due(connect: Callable, *, graph: Graph, vault: Vault, limiter: Optional[RateLimiter] = None,
-             now: Optional[datetime] = None, batch: int = 50, concurrency: int = 8) -> SendStats:
+             now: Optional[datetime] = None, batch: int = 50, concurrency: Optional[int] = None) -> SendStats:
     """Deliver due outbox rows. Claiming and marking `sending` is one committed
     transaction; the HTTP calls and their results are recorded afterwards."""
     now = now or utcnow()
     limiter = limiter or RateLimiter()
     stats = SendStats()
+    concurrency = concurrency or _default_concurrency()
 
     conn = connect()
     items = []

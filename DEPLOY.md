@@ -34,17 +34,40 @@ You also need: `WA_APP_SECRET` and `WA_APP_ID` (developers.facebook.com → your
 
 ## Step 3 — The database, once, by hand
 
-The first migrations (0001–0003) change the live CRM tables, so the first run is never automatic. From your machine:
+The database is the Supabase project the licence server and the CRM already use, so this step is done with care and by hand; no deploy ever does it first.
+The first migrations (0001–0003) change the live CRM tables. Nothing is deleted, but do these in order:
 
-1. Read `db/README.md`, then run `db/preflight.sql` in the Supabase SQL editor and read what it says.
-2. Run (the connection string comes from the environment, so it is not in your shell history):
+1. Read `db/README.md` and the section "What the first migration does to everything else" below.
+2. **Copy the tables it changes.** In the Supabase SQL editor run `db/backup_before_first_run.sql`. It makes `bak_contacts`, `bak_messages`… (locked like the
+   rest), and the last query shows the two counts side by side; they must match. The free Supabase plan has no automatic backups, so this is your only undo.
+3. **Preflight.** Run `db/preflight.sql` and read the result: your own business has a row in `tenants`; `rows_without_tenant` is understood; and
+   **`name_collisions` is `[]`**. Anything listed there is a table prism-wa wants to create that another Prism service already has: stop and tell me.
+4. Run (the connection string comes from the environment, so it is not in your shell history):
 
         $env:DATABASE_URL = "<the session pooler string>"      (PowerShell; in bash: export DATABASE_URL=...)
-        python db/apply.py --status                            what would be applied; changes nothing
+        python db/apply.py --status                            what would be applied, and "name collisions: none"; changes nothing
         python db/apply.py --pending --first-run
 
-From then on every deploy runs `python db/apply.py --pending` by itself (the blueprint's `preDeployCommand`): it applies only what the database
-has not got, and if a migration fails the old version keeps serving.
+From then on every deploy runs `python db/apply.py --pending` by itself: it applies only what the database has not got, and if a migration fails the old
+version keeps serving. (If you ever put the running service on Supabase's transaction pooler, port 6543, give migrations their own connection with
+`WA_MIGRATE_DATABASE_URL` set to the session pooler, port 5432.)
+
+### What the first migration does to everything else that uses this database
+
+Checked against the other Prism services' code and tables (22-Oct-2026):
+
+* **The licence server's tables are not touched.** None of prism-wa's tables has a licence-server table's name. (One did: `audit_log`. It is `wa_audit_log` now, and
+  the first run refuses, naming them, if any table it would create already exists. A test keeps the list honest.)
+* **Existing CRM rows are kept.** 0001 adds columns, fills in `tenant_id` on rows that have none (with the legacy default tenant, slug `orena`: check it in the
+  preflight), and swaps the two global unique indexes on contacts for per-tenant ones. 0003 turns on row-level security.
+* **n8n and the licence server keep working.** Both use the Supabase `service_role` key (the n8n credential guide says so), which bypasses row-level security. A writer
+  that sends no tenant (the n8n flows) gets the default one from a trigger, and conversations and messages inherit their contact's. Something that used the public
+  `anon` key on those tables would stop seeing rows: nothing Prism ships does, and no customer's computer holds that key.
+* **Every new table is locked** against the public Supabase key (row-level security on and access revoked from `anon` and `authenticated`): 69 tables, none open.
+* **The shared connection limit.** Supabase's session pooler gives about 15 connections in all, to everything. The service sends 4 messages at a time (not 8) so a
+  broadcast cannot use them up; set `WA_SEND_CONCURRENCY` to change it. If the licence server ever logs "max clients reached", move the service to the
+  transaction pooler (port 6543) and set `WA_MIGRATE_DATABASE_URL` for migrations.
+* **Undoing it.** `db/rollback/0001_0003_down.sql` removes the enforcement and keeps every row; the `bak_*` copies from step 2 are the safety net.
 
 ## Step 4 — Create the two services
 
@@ -189,6 +212,8 @@ else); read them before you run it. It adds a column to `agents` (`email`), `pho
 | `WA_ENV` | `prod` on a live service: the gateway then refuses to start with a weak or missing secret (app secret 16+ characters, verify token 24+, internal token 32+, token keys set) and says which | set by `render.yaml` |
 | `LOG_LEVEL` | `INFO` (default), `DEBUG`, `WARNING` | optional |
 | `WA_EMBEDDED_WORKER`, `WA_MIGRATE_ON_START` | `yes` runs the worker inside the gateway, and applies missing migrations when it starts: for a host with no background-worker service or pre-deploy step (the free option below) | `render.free.yaml` sets them |
+| `WA_MIGRATE_DATABASE_URL` | optional: the connection migrations use (Supabase session pooler, port 5432) when `DATABASE_URL` is the transaction pooler (6543) | only if you switch pooler |
+| `WA_SEND_CONCURRENCY` | messages sent at once, 1–16 (default 4). Each takes a database connection for a moment and the database is shared with the licence server | optional |
 | `WA_FIRST_RUN` | `yes` lets a deploy's migration step be the first to touch a database (see step 3). Normally not used: run `--first-run` by hand | optional, once |
 | `PRISM_WA_URL`, `PRISM_WA_INTERNAL_TOKEN`, `THREADPOOL_SIZE` (licence server) | where the licence server finds this service, the shared secret, and how many requests it works on at once (default 100) | see step 7 |
 | `WA_APP_ID`, `WA_ES_CONFIG_ID` | for the connect page | Meta dashboard (Embedded Signup configuration) |

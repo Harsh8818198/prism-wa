@@ -111,7 +111,7 @@ def record(cur, tenant_id, action: str, *, summary: str, actor_id=None, actor_la
         cur.execute("select name, role from agents where id = %s and tenant_id = %s", (actor_id, tenant_id))
         row = cur.fetchone()
         label = ("%s (%s)" % (row[0], row[1])) if row else ""
-    cur.execute("insert into audit_log (tenant_id, at, actor_id, actor_label, source, action, target_kind, target_id, summary, detail) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+    cur.execute("insert into wa_audit_log (tenant_id, at, actor_id, actor_label, source, action, target_kind, target_id, summary, detail) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (tenant_id, now or utcnow(), actor_id, label[:200] or None, source, action[:80], target_kind[:60] or None, str(target_id)[:200] or None, summary[:300], Json(detail) if detail else None))
 
 
@@ -164,13 +164,13 @@ def list_entries(cur, tenant_id, *, action: str = "", actor: str = "", q: str = 
     if until:
         where.append("at < %s")
         params.append(until)
-    cur.execute("select count(*) from audit_log where " + " and ".join(where), params)
+    cur.execute("select count(*) from wa_audit_log where " + " and ".join(where), params)
     total = cur.fetchone()[0]
-    cur.execute("select id, at, actor_id, actor_label, source, action, target_kind, target_id, summary, detail from audit_log where " + " and ".join(where)
+    cur.execute("select id, at, actor_id, actor_label, source, action, target_kind, target_id, summary, detail from wa_audit_log where " + " and ".join(where)
                 + " order by at desc, id desc limit %s offset %s", params + [max(1, min(int(limit), 500)), max(0, int(offset))])
     cols = ("id", "at", "actor_id", "actor", "source", "action", "target_kind", "target_id", "summary", "detail")
     entries = [dict(zip(cols, r)) for r in cur.fetchall()]
-    cur.execute("select distinct split_part(action, '.', 1) from audit_log where tenant_id = %s order by 1", (tenant_id,))
+    cur.execute("select distinct split_part(action, '.', 1) from wa_audit_log where tenant_id = %s order by 1", (tenant_id,))
     return {"entries": entries, "total": total, "areas": [r[0] for r in cur.fetchall()]}
 
 
@@ -183,7 +183,7 @@ def export_csv(cur, tenant_id, since=None, until=None) -> str:
     if until:
         where.append("at < %s")
         params.append(until)
-    cur.execute("select at, actor_label, source, action, target_kind, target_id, summary from audit_log where " + " and ".join(where) + " order by at, id limit 100000", params)
+    cur.execute("select at, actor_label, source, action, target_kind, target_id, summary from wa_audit_log where " + " and ".join(where) + " order by at, id limit 100000", params)
     out = io.StringIO()
     w = csv.writer(out)
     w.writerow(["when", "who", "through", "action", "kind", "target", "what happened"])
@@ -201,7 +201,7 @@ def purge(cur, tenant_id=None, *, now: Optional[datetime] = None, keep_days: int
     """Drop lines older than `keep_days` (for one workspace, or for all of them when none is named)."""
     cutoff = (now or utcnow()) - timedelta(days=keep_days)
     if tenant_id is None:
-        cur.execute("delete from audit_log where at < %s", (cutoff,))
+        cur.execute("delete from wa_audit_log where at < %s", (cutoff,))
     else:
-        cur.execute("delete from audit_log where at < %s and tenant_id = %s", (cutoff, tenant_id))
+        cur.execute("delete from wa_audit_log where at < %s and tenant_id = %s", (cutoff, tenant_id))
     return cur.rowcount

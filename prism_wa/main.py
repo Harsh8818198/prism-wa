@@ -19,6 +19,8 @@ Optional, switching on the rest of the service:
   WA_EMBEDDED_WORKER  yes: run the worker as a thread of this process (a host with no background-worker service; see embedded.py)
   WA_MIGRATE_ON_START yes: apply missing migrations when the service starts (a host with no pre-deploy step; see migrate.py)
   WA_FIRST_RUN        yes: allow that to be the very first thing to touch the database (0001-0003 change live CRM tables). Once, then remove.
+  WA_MIGRATE_DATABASE_URL  optional: the connection migrations use (session pooler 5432), when DATABASE_URL is the transaction pooler (6543)
+  WA_SEND_CONCURRENCY      messages sent at once (default 4, 1-16): each holds a database connection for a moment, and the database is shared
 
 WA_ENV=prod switches on the checks a live service needs: the three secrets must be long enough to be secrets, and WA_INTERNAL_TOKEN and
 WA_TOKEN_KEYS must be set (without them the licence server cannot reach the gateway and no customer's Meta token can be kept). The process
@@ -101,7 +103,7 @@ def create_app_from_env(env=None):
     if env is os.environ and secrets:                                                          # the ads sign-in is the same Meta app as WhatsApp unless said otherwise
         os.environ.setdefault("META_APP_SECRET", secrets[0])
     if _yes(env, "WA_MIGRATE_ON_START"):
-        migrate.apply_on_start(dsn, first_run=_yes(env, "WA_FIRST_RUN"))
+        migrate.apply_on_start((env.get("WA_MIGRATE_DATABASE_URL") or "").strip() or dsn, first_run=_yes(env, "WA_FIRST_RUN"))
     vault = Vault.from_env(env) if (env.get("WA_TOKEN_KEYS") or "").strip() else None
     ai_agent.configure(llm.from_env(env), embedder=embeddings.from_env(env))
     graph = Graph()

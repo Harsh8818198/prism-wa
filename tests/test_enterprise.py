@@ -197,7 +197,7 @@ def test_only_the_enterprise_plan_can_read_the_log_but_every_plan_keeps_it(world
     owner, _ = world.team()
     world.db.q("update tenant_settings set settings = '{\"plan\": \"premium\"}'")
     world.post("/internal/tags/delete", name="x", by_agent_id=str(owner["id"]))
-    assert world.db.one("select count(*) from audit_log") == 1
+    assert world.db.one("select count(*) from wa_audit_log") == 1
     r = world.post("/internal/audit/list", by_agent_id=str(owner["id"]))
     assert r.status_code == 403 and r.json()["needs"] == "enterprise"
 

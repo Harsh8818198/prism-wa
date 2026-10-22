@@ -15,11 +15,12 @@ keeps every row) sit alongside.
 
 ## Order of operations in production
 
+0. **Back up the tables first**: run `backup_before_first_run.sql` (copies of what 0001–0003 change; the free Supabase plan has no backups).
 1. **Preflight.** Run `preflight.sql`, read the JSON. Check: `tenants` (is there a
    row for *your own* business? `0001` assumes slug `orena` — edit the constant at
    the top of the second block in `0001` if yours differs), `rows_without_tenant`,
    `contacts_by_tenant` (any Shakti contacts stuck in `null` would be attributed to
-   your business), `phones_that_normalise_to_the_same_number`,
+   your business), `name_collisions` (must be `[]`: a table prism-wa would create that already exists), `phones_that_normalise_to_the_same_number`,
    `contacts_tags_type` (must be `ARRAY` or null).
 2. **Run 0001, then 0002, then 0003.** This takes a lock on the CRM tables for a
    few seconds; n8n writes wait, then continue.

@@ -8,7 +8,7 @@
 --   forms             a WhatsApp Flow (a form that opens inside the chat) in Prism's own model plus the Flow JSON it becomes
 --   form_responses    what a customer filled in
 --   flow_keys         the RSA key pair a workspace's forms use to talk to Meta's endpoint calls (the private half is stored encrypted)
---   audit_log         who changed what, when (enterprise)
+--   wa_audit_log      who changed what, when (enterprise). NOT `audit_log`: the licence server keeps a table of that name in the same database
 --   tenant_branding   the name, logo and colour a reseller shows instead of Prism's
 --   sso_config / sso_states   single sign-on (OIDC) settings and the sign-ins in progress
 --   tenant_parent / commission_ledger   a workspace that is a reseller's customer, and what the reseller earns from it
@@ -192,7 +192,7 @@ alter table phone_numbers add column if not exists coexistence_state jsonb;
 
 -- ── audit log, SSO, branding, resellers ─────────────────────────────────────
 
-create table if not exists audit_log (
+create table if not exists wa_audit_log (
   id           bigserial primary key,
   tenant_id    uuid not null references tenants(id),
   at           timestamptz not null default now(),
@@ -205,8 +205,8 @@ create table if not exists audit_log (
   summary      text,
   detail       jsonb
 );
-create index if not exists audit_log_tenant_idx on audit_log (tenant_id, at desc);
-create index if not exists audit_log_action_idx on audit_log (tenant_id, action, at desc);
+create index if not exists wa_audit_log_tenant_idx on wa_audit_log (tenant_id, at desc);
+create index if not exists wa_audit_log_action_idx on wa_audit_log (tenant_id, action, at desc);
 
 create table if not exists tenant_branding (
   tenant_id      uuid primary key references tenants(id),
@@ -469,7 +469,7 @@ do $$
 declare t text;
 begin
   foreach t in array array['commerce_config', 'products', 'orders', 'payments', 'refunds', 'forms', 'form_responses', 'flow_keys',
-                           'audit_log', 'tenant_branding', 'sso_config', 'sso_states', 'sso_sessions', 'partner_invites'] loop
+                           'wa_audit_log', 'tenant_branding', 'sso_config', 'sso_states', 'sso_sessions', 'partner_invites'] loop
     execute format('alter table %I enable row level security', t);
     execute format('drop policy if exists wa_tenant_isolation on %I', t);
     execute format('create policy wa_tenant_isolation on %I for all to wa_app'
@@ -499,10 +499,10 @@ begin
   create policy wa_tenant_isolation on commission_ledger for all to wa_app
     using (parent_tenant_id = wa_current_tenant()) with check (parent_tenant_id = wa_current_tenant());
 
-  execute 'grant usage, select on sequence audit_log_id_seq to wa_app';
+  execute 'grant usage, select on sequence wa_audit_log_id_seq to wa_app';
   execute 'grant usage, select on sequence commission_ledger_id_seq to wa_app';
   if exists (select 1 from pg_roles where rolname = 'service_role') then
-    execute 'grant usage, select on sequence audit_log_id_seq to service_role';
+    execute 'grant usage, select on sequence wa_audit_log_id_seq to service_role';
     execute 'grant usage, select on sequence commission_ledger_id_seq to service_role';
   end if;
 end $$;
