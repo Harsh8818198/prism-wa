@@ -481,6 +481,12 @@ def make_conn_ops(graph: Graph, vault: Vault, app_id: str = "") -> dict:
             **ops_templates.make_conn_ops(graph, vault, app_id), **ops_usage.make_conn_ops(graph, vault, app_id), **ops_ads.make_conn_ops(graph, vault, app_id), **ops_commerce.make_conn_ops(graph, vault, app_id)}
 
 
+def tenant_exists(cur, t, d):
+    """Does this workspace exist here? The licence server asks before it links a licence to one, so a typo cannot give a paying customer an empty inbox."""
+    cur.execute("select 1 from tenants where id = %s", (t,))
+    return {"exists": cur.fetchone() is not None}
+
+
 CURSOR_OPS = {
     "/internal/templates/list": templates_list, "/internal/templates/lint": templates_lint,
     "/internal/templates/library": templates_library, "/internal/numbers/list": numbers_list,
@@ -718,6 +724,7 @@ CURSOR_OPS.update(ops_media.OPS)                   # (after the older canned rou
 CURSOR_OPS.update(ops_templates.OPS)              # (after the older library route: this one adds the industries)
 CURSOR_OPS.update(ops_usage.OPS)
 CURSOR_OPS.update({
+    "/internal/tenant/exists": tenant_exists,
     "/internal/campaigns/test": campaigns_test,
     "/internal/schedules/create": schedules_create, "/internal/schedules/list": schedules_list,
     "/internal/schedules/set_enabled": schedules_set_enabled, "/internal/schedules/delete": schedules_delete,

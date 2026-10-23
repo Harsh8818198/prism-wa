@@ -516,3 +516,17 @@ def test_without_the_setting_the_old_tenant_is_still_orena_and_a_named_one_is_us
     assert other.one("select name from tenants where slug = 'acme'") == "Acme"
     assert other.one("select count(*) from tenants where slug = 'orena'") == 0
     assert other.one("select value from wa_platform_config where key = 'legacy_default_tenant'") == str(other.one("select id from tenants where slug = 'acme'"))
+
+
+# ── the licence server asks THIS service whether a workspace exists (not the old CRM's database) ─────────────────────────────────────────────
+
+def test_a_workspace_can_be_looked_up_by_the_licence_server_and_only_with_the_token(migrated):
+    tenant = H.tenant(migrated, "orena")
+    client = TestClient(create_app(app_secrets=SECRET, verify_token=TOKEN, connect=connect_to(migrated), internal_token=INTERNAL))
+
+    def ask(tenant_id, headers=None):
+        return client.post("/internal/tenant/exists", json={"tenant_id": str(tenant_id)}, headers={"X-Internal-Token": INTERNAL} if headers is None else headers)
+    assert ask(tenant).json() == {"ok": True, "exists": True}
+    assert ask("00000000-0000-4000-8000-000000000000").json() == {"ok": True, "exists": False}
+    assert ask(tenant, headers={}).status_code == 401
+    assert ask(tenant, headers={"X-Internal-Token": "wrong"}).status_code == 401
