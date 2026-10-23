@@ -70,12 +70,18 @@ class Provider:
 class FakeMeta:
     def __init__(self):
         self.calls, self.refuse = [], None
+        self.shared, self.numbers = None, None              # what Meta would say the customer shared / which numbers an account has (None: not asked in this test)
 
     def __call__(self, method, url, data, headers):
         parts = urlsplit(url)
         path = parts.path.split("/v25.0/", 1)[-1]
         body = json.loads(data) if data and headers.get("Content-Type", "").startswith("application/json") else None
-        self.calls.append({"method": method, "path": path, "body": body})
+        self.calls.append({"method": method, "path": path, "body": body, "auth": headers.get("Authorization")})
+        if path == "debug_token" and self.shared is not None:
+            scopes = [{"scope": "whatsapp_business_management", "target_ids": self.shared}, {"scope": "business_management"}]
+            return 200, json.dumps({"data": {"is_valid": True, "granular_scopes": scopes}}).encode()
+        if path.endswith("/phone_numbers") and self.numbers is not None:
+            return 200, json.dumps({"data": self.numbers}).encode()
         if path.endswith("/smb_app_data") and self.refuse:
             return 400, json.dumps({"error": {"message": "Not allowed", "code": 100, "error_user_msg": self.refuse}}).encode()
         if path == "oauth/access_token":
@@ -654,6 +660,58 @@ def test_connecting_alongside_the_phone_app_skips_registering_and_asks_for_the_h
     assert row["coexistence"] is True and row["status"] == "connected" and row["coexistence_state"]["contacts"] == "requested"
 
 
+def test_a_phone_app_signup_that_names_neither_account_nor_number_is_finished_by_asking_meta(world):
+    """Meta's FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING event may carry no ids: the server finds the one account and number the customer just shared."""
+    world.db.q("update wabas set token_enc = null")
+    world.meta_.shared, world.meta_.numbers = [P.WABA], [{"id": P.PNID, "display_phone_number": "+91 97260 63133", "verified_name": "Shakti"}]
+    c = world.conn()
+    result = onboarding.complete_signup(c, graph=world.graph_, vault=world.vault_, tenant_id=world.tid_, app_id="123", app_secret="sec", code="abc", waba_id="", phone_number_id="",
+                                        coexistence=True)
+    c.close()
+    assert (result.waba_id, result.phone_number_id) == (P.WABA, P.PNID) and result.registered and result.subscribed and not result.errors
+    asked = [x for x in world.meta_.calls if x["path"] == "debug_token"]
+    assert asked and asked[0]["auth"] == "Bearer 123|sec"                       # the app's own token, never the customer's, reads who shared what
+    assert not any(x["path"].endswith("/register") for x in world.meta_.calls)
+    row = world.db.q("select coexistence, status, display from phone_numbers where phone_number_id = %s", (P.PNID,))[0]
+    assert row["coexistence"] is True and row["status"] == "connected"
+    assert world.db.one("select token_enc is not null from wabas where waba_id = %s", (P.WABA,)) is True
+
+
+def test_a_page_that_names_only_the_account_gets_the_number_from_meta(world):
+    world.meta_.numbers = [{"id": P.PNID, "display_phone_number": "+91 97260 63133"}]
+    c = world.conn()
+    result = onboarding.complete_signup(c, graph=world.graph_, vault=world.vault_, tenant_id=world.tid_, app_id="123", app_secret="sec", code="abc", waba_id=P.WABA, phone_number_id="",
+                                        coexistence=True)
+    c.close()
+    assert result.phone_number_id == P.PNID and not any(x["path"] == "debug_token" for x in world.meta_.calls)
+
+
+@pytest.mark.parametrize("shared, numbers, reason", [
+    ([], None, "incomplete"),                                                 # Meta shows no account at all
+    ([P.WABA, "999000111"], None, "ambiguous"),                               # two accounts were shared: guessing could connect the wrong business
+    ([P.WABA], [], "incomplete"),                                             # the account has no number yet
+    ([P.WABA], [{"id": P.PNID}, {"id": "555000777"}], "ambiguous"),           # two numbers on it and the page did not say which
+])
+def test_a_signup_that_cannot_be_pinned_to_one_number_is_refused_and_stores_nothing(world, shared, numbers, reason):
+    world.db.q("update wabas set token_enc = null")
+    world.meta_.shared, world.meta_.numbers = shared, numbers if numbers is not None else [{"id": P.PNID}]
+    c = world.conn()
+    with pytest.raises(onboarding.OnboardingError) as why:
+        onboarding.complete_signup(c, graph=world.graph_, vault=world.vault_, tenant_id=world.tid_, app_id="123", app_secret="sec", code="abc", waba_id="", phone_number_id="", coexistence=True)
+    c.close()
+    assert why.value.reason == reason
+    assert world.db.one("select token_enc is null from wabas where waba_id = %s", (P.WABA,)) is True
+    assert not any(x["path"].endswith(("/subscribed_apps", "/register", "/smb_app_data")) for x in world.meta_.calls)
+
+
+def test_a_signup_without_its_code_is_still_refused(world):
+    c = world.conn()
+    with pytest.raises(onboarding.OnboardingError) as why:
+        onboarding.complete_signup(c, graph=world.graph_, vault=world.vault_, tenant_id=world.tid_, app_id="123", app_secret="sec", code="", waba_id=P.WABA, phone_number_id=P.PNID)
+    c.close()
+    assert why.value.reason == "incomplete" and not world.meta_.calls
+
+
 def test_an_ordinary_connection_still_registers_the_number(world):
     c = world.conn()
     result = onboarding.complete_signup(c, graph=world.graph_, vault=world.vault_, tenant_id=world.tid_, app_id="123", app_secret="sec", code="abc", waba_id=P.WABA, phone_number_id=P.PNID)
@@ -677,6 +735,7 @@ def test_asking_for_history_on_an_ordinary_number_is_explained(world):
 def test_the_onboarding_page_offers_the_phone_app_choice_and_sends_it_back(world):
     page = onboarding.render_page(app_id="123", config_id="456", state="s", version="v25.0", coexistence=True)
     assert "whatsapp_business_app_onboarding" in page and '"coexistence": true' in page
+    assert "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING" in page and "'FINISH'" in page                  # the page listens for both ways Meta says "done"
     assert '"coexistence": false' in onboarding.render_page(app_id="123", config_id="456", state="s", version="v25.0")
     link = world.post("/internal/onboarding/link", coexistence=True).json()
     assert link["path"].endswith("&mode=coexistence")

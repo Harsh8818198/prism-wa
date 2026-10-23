@@ -5,6 +5,7 @@
                        RAW body first; a forged or unsigned request gets 401 and
                        leaves no trace in the database. Then each event is
                        stored (deduplicated) and a job queued, and Meta gets 200.
+    GET  /privacy, /data-deletion   The two public pages Meta asks for before an app goes live (legal.py).
     GET  /healthz      Liveness (never touches the database).
     GET  /readyz       Readiness: the database answers and has every migration; is the worker alive (health.py).
 
@@ -23,7 +24,7 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from prism_wa import health, hooks, internal, public_api
+from prism_wa import health, hooks, internal, legal, public_api
 from prism_wa.events import normalise
 from prism_wa.graph import Graph
 from prism_wa.signature import verify_signature
@@ -62,6 +63,8 @@ def create_app(*, app_secrets: Union[str, Iterable[str]], verify_token: str,
         internal.register(app, internal_token=internal_token, connect=connect, graph=graph or Graph(),
                           vault=vault, app_id=app_id, app_secret=secrets[0], es_config_id=es_config_id,
                           verify_token=verify_token)
+
+    legal.mount(app)
 
     @app.get("/healthz")
     def healthz():

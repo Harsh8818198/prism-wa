@@ -370,7 +370,11 @@ licence with the key that matches what the customer bought. The limits are in
 * **Coexistence.** "Connect and keep using the phone app" in Settings → Connection opens Embedded Signup in the WhatsApp Business app mode.
   The number is not re-registered; Meta is asked for the phone's contacts and the last six months of chats (allowed only in the first 24
   hours), and messages typed on the phone arrive as echoes. Subscribe the app to the `smb_message_echoes`, `history` and `smb_app_state_sync`
-  fields for this.
+  fields for this. Meta finishes this kind of signup with `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING`, which may name neither the account nor the
+  number: the server then asks Meta (the app token reads which account the customer shared, then that account's numbers) and connects only
+  when the answer is one account and one number; otherwise it stops and stores nothing. What the customer needs: the WhatsApp Business app
+  (2.24.17 or newer) with the number in use for at least 7 days, in a supported country (India is). If a text message with a code arrives
+  instead of a prompt inside the phone app, do not enter it: that would register the number as a new one and take it off the phone app.
 
 ## 5b. Connect a number
 

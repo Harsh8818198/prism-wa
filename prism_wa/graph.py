@@ -171,6 +171,25 @@ class Graph:
             raise GraphError("Meta did not return an access token")
         return str(token)
 
+    def shared_wabas(self, token: str, app_id: str, app_secret: str) -> list:
+        """The WhatsApp Business Accounts the customer just shared with our app, read from the token Meta issued for them (its granular scopes). Used when the
+        sign-up page could not tell us which account it connected."""
+        out = self._call("GET", "debug_token", token="%s|%s" % (app_id, app_secret), query={"input_token": token})
+        scopes = [s for s in ((out.get("data") or {}).get("granular_scopes") or []) if isinstance(s, dict)]
+        for wanted in ("whatsapp_business_management", "whatsapp_business_messaging"):
+            ids = []
+            for s in scopes:
+                if s.get("scope") == wanted:
+                    ids += [str(t) for t in (s.get("target_ids") or []) if str(t) not in ids]
+            if ids:
+                return ids
+        return []
+
+    def waba_numbers(self, token: str, waba_id: str) -> list:
+        """The numbers on a WhatsApp Business Account: [{id, display_phone_number, verified_name}]."""
+        out = self._call("GET", "%s/phone_numbers" % waba_id, token=token, query={"fields": "id,display_phone_number,verified_name"})
+        return [r for r in (out.get("data") or []) if isinstance(r, dict) and r.get("id")]
+
     def register_number(self, token: str, phone_number_id: str, pin: str) -> dict:
         return self._call("POST", "%s/register" % phone_number_id, token=token,
                           body={"messaging_product": "whatsapp", "pin": pin})

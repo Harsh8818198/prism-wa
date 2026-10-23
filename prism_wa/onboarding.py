@@ -20,9 +20,15 @@ carries it, and only a valid unexpired state lets a tenant be written. The
 state is HMAC-signed with WA_INTERNAL_TOKEN, a secret the licence server and
 this service share.
 
+The page normally hands us the ids; when it cannot (a number connected from the
+WhatsApp Business app finishes with an event that may name neither the account
+nor the number) we ask Meta with the customer's own token, and only act on an
+unambiguous answer: one shared account, one number on it.
+
 NOT yet verified against Meta live: the exact Embedded Signup v4 message the
 page receives and the config_id it needs come from the Meta dashboard. The calls
-here follow the spec (§1.2) and are tested against a fake Graph.
+here follow the spec (§1.2) and Meta's coexistence docs, and are tested against a
+fake Graph.
 """
 from __future__ import annotations
 
@@ -96,15 +102,44 @@ def new_pin() -> str:
     return "%06d" % pysecrets.randbelow(1_000_000)
 
 
+def _find_what_was_connected(graph: Graph, token: str, app_id: str, app_secret: str, waba_id: str, phone_number_id: str):
+    """Connecting a number that already lives in the WhatsApp Business app finishes with an event that may not name the account or the number (Meta sends
+    FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING, and its fields are optional). Ask Meta with the customer's own token instead of refusing the signup.
+    Only an unambiguous answer is used: one shared account, one number on it."""
+    display = ""
+    try:
+        if not waba_id:
+            wabas = graph.shared_wabas(token, app_id, app_secret)
+            if not wabas:
+                raise OnboardingError("incomplete", "Meta did not say which WhatsApp Business Account was connected; please try again")
+            if len(wabas) > 1:
+                raise OnboardingError("ambiguous", "more than one WhatsApp Business Account was shared; connect again and choose just one")
+            waba_id = wabas[0]
+        if not phone_number_id:
+            numbers = graph.waba_numbers(token, waba_id)
+            if not numbers:
+                raise OnboardingError("incomplete", "that WhatsApp Business Account has no number yet; please try again in a minute")
+            if len(numbers) > 1:
+                raise OnboardingError("ambiguous", "that WhatsApp Business Account has %d numbers and the page did not say which one you just connected" % len(numbers))
+            phone_number_id = str(numbers[0]["id"])
+            display = str(numbers[0].get("display_phone_number") or "")
+    except GraphError as exc:
+        raise OnboardingError("incomplete", "could not find the connected number: %s" % exc.message) from exc
+    return waba_id, phone_number_id, display
+
+
 def complete_signup(conn, *, graph: Graph, vault: Vault, tenant_id, app_id: str, app_secret: str,
                     code: str, waba_id: str, phone_number_id: str, display: str = "",
                     override_callback_uri: str = "", verify_token: str = "", coexistence: bool = False) -> SignupResult:
-    if not (code and waba_id and phone_number_id):
-        raise OnboardingError("incomplete", "the signup is missing its code, WABA or number")
+    if not code:
+        raise OnboardingError("incomplete", "the signup is missing its code")
     try:
         token = graph.exchange_code(app_id, app_secret, code)
     except GraphError as exc:
         raise OnboardingError("code_rejected", "Meta did not accept that signup code: %s" % exc.message) from exc
+    if not (waba_id and phone_number_id):
+        waba_id, phone_number_id, found = _find_what_was_connected(graph, token, app_id, app_secret, waba_id, phone_number_id)
+        display = display or found
 
     token_enc, key_ver = vault.encrypt(token, context=waba_id)
     errors = []
@@ -201,6 +236,7 @@ button{font-size:1rem;padding:.7rem 1.2rem;border:0;border-radius:.5rem;backgrou
 <script>
 const CFG = __CONFIG__;
 let session = {};
+let stoppedAt = '';
 const say = t => { document.getElementById('msg').textContent = t; };
 window.fbAsyncInit = function () {
   FB.init({ appId: CFG.appId, autoLogAppEvents: true, xfbml: false, version: CFG.version });
@@ -209,14 +245,19 @@ window.addEventListener('message', function (e) {
   if (!/facebook\\.com$/.test(new URL(e.origin).hostname)) return;
   try {
     const data = JSON.parse(e.data);
-    if (data.type === 'WA_EMBEDDED_SIGNUP' && data.event === 'FINISH') {
-      session = { waba_id: data.data.waba_id, phone_number_id: data.data.phone_number_id };
+    if (data.type !== 'WA_EMBEDDED_SIGNUP') return;
+    const d = data.data || {};
+    // FINISH: a new number. FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING: a number from the WhatsApp Business app (it may name neither account nor number: the server then asks Meta).
+    if (data.event === 'FINISH' || data.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING') {
+      session = { waba_id: d.waba_id || session.waba_id, phone_number_id: d.phone_number_id || session.phone_number_id };
+    } else if (data.event === 'CANCEL') {
+      stoppedAt = (d.error_message ? d.error_message + ' ' : '') + (d.current_step ? '(at the "' + d.current_step + '" step)' : '');
     }
   } catch (_) {}
 });
 document.getElementById('go').addEventListener('click', function () {
   FB.login(function (r) {
-    if (!r.authResponse || !r.authResponse.code) { say('Connecting was cancelled.'); return; }
+    if (!r.authResponse || !r.authResponse.code) { say(('Connecting was cancelled. ' + stoppedAt).trim()); return; }
     say('Finishing setup...');
     fetch('/onboarding/complete', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ state: CFG.state, code: r.authResponse.code, coexistence: CFG.coexistence, ...session }) })
