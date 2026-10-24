@@ -13,7 +13,7 @@ def client(**kw):
 
 
 @pytest.mark.parametrize("kw", [{}, {"internal_token": "tok"}])
-@pytest.mark.parametrize("path", ["/privacy", "/data-deletion"])
+@pytest.mark.parametrize("path", ["/", "/privacy", "/data-deletion"])
 def test_the_pages_are_public_html_with_or_without_the_internal_api(path, kw):
     r = client(**kw).get(path)
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
@@ -36,3 +36,12 @@ def test_what_the_policy_promises_matches_the_code():
 
 def test_the_deletion_page_says_how_to_ask_and_by_when():
     assert "Delete my workspace" in legal.DELETION and "Delete my data" in legal.DELETION and "30 days" in legal.DELETION
+
+
+def test_the_home_page_says_what_the_service_is_and_who_runs_it():
+    """Meta's crawler needs a 200 from the app's Site URL, and the Tech Provider form wants a website showing the service and the business behind it."""
+    r = client().get("/")
+    assert r.status_code == 200
+    for needed in ("Prism WhatsApp platform", "Alphakore", "Vadodara", legal.CONTACT, "alphakore.org", 'href="/privacy"', 'href="/data-deletion"', "own WhatsApp Business number", "Embedded Signup"):
+        assert needed in r.text, needed
+    assert "%(" not in r.text and "%s" not in r.text

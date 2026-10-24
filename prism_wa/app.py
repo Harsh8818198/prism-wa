@@ -5,7 +5,7 @@
                        RAW body first; a forged or unsigned request gets 401 and
                        leaves no trace in the database. Then each event is
                        stored (deduplicated) and a job queued, and Meta gets 200.
-    GET  /privacy, /data-deletion   The two public pages Meta asks for before an app goes live (legal.py).
+    GET  /, /privacy, /data-deletion   The public pages Meta asks for before an app goes live (legal.py).
     GET  /healthz      Liveness (never touches the database).
     GET  /readyz       Readiness: the database answers and has every migration; is the worker alive (health.py).
 

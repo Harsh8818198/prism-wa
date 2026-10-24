@@ -1,4 +1,5 @@
-"""The two public pages Meta asks for before an app can go live: a privacy policy and how to have data deleted.
+"""The public pages Meta asks for before an app can go live: a home page that says what the service is and who runs it (Meta's crawler must get a 200 from the
+app's Site URL, and the Tech Provider form wants a website showing the service), a privacy policy, and how to have data deleted.
 
 They are plain, static and need no login or secret, so they are mounted whether or not the service-to-service API is. Every statement here describes what this
 code does (tokens sealed in vault.py, rows isolated per workspace in db/migrations, `contacts.erase_contact`, `audit.KEEP_DAYS`); change the page when the code changes.
@@ -20,6 +21,43 @@ _STYLE = ("body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-widt
 def _page(title: str, body: str) -> str:
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
             "<title>%s</title><style>%s</style></head><body>%s</body></html>" % (title, _STYLE, body))
+
+
+ADDRESS = "33 NarHari Park, Vadodara, Gujarat, India"
+
+HOME = _page("Prism WhatsApp platform by Alphakore", """
+<h1>Prism WhatsApp platform</h1>
+<p class="meta">Built and run by Alphakore, a software studio in Vadodara, India.</p>
+
+<p>Prism lets a business use its <strong>own WhatsApp Business number</strong> to talk to its customers, from one place, with its whole team.
+The business stays the owner of its WhatsApp account and its customer list.</p>
+
+<h2>What a business can do with it</h2>
+<ul>
+<li><strong>Shared team inbox.</strong> Everyone answers customers from the same screen; chats can be assigned, tagged and noted.</li>
+<li><strong>Message templates.</strong> Write the messages WhatsApp requires for starting a conversation, send them for approval and see their status.</li>
+<li><strong>Campaigns.</strong> Send an approved template to a list of customers who have agreed to hear from you. A person who replies STOP is not messaged again.</li>
+<li><strong>Automatic replies and flows.</strong> Welcome messages, away messages and simple step-by-step conversations.</li>
+<li><strong>AI replies (optional).</strong> A business can let an AI assistant draft or send answers from its own knowledge base, and hand over to a person when it is unsure.</li>
+<li><strong>Forms and a small shop (optional).</strong> Collect details inside WhatsApp and take orders with payment links.</li>
+</ul>
+
+<h2>How a business gets started</h2>
+<ol>
+<li>Get Prism and a licence from Alphakore.</li>
+<li>Connect your own WhatsApp number through Meta&rsquo;s official sign-up (WhatsApp Embedded Signup). You sign in to your own Facebook account and approve exactly what Prism may do.</li>
+<li>Send, reply and run campaigns from Prism. Meta bills you directly for WhatsApp conversations.</li>
+</ol>
+
+<h2>Your data</h2>
+<p>Each business sees only its own data. Read the <a href="/privacy">privacy policy</a>, or see <a href="/data-deletion">how to have data deleted</a>.</p>
+
+<h2>About Alphakore</h2>
+<p>Alphakore builds software, automation and AI tools for businesses. Prism is our product.<br>
+%(address)s<br>
+<a href="mailto:%(contact)s">%(contact)s</a> &middot; <a href="https://alphakore.org">alphakore.org</a></p>
+<p class="meta"><a href="/privacy">Privacy policy</a> &middot; <a href="/data-deletion">Data deletion</a></p>
+""" % {"address": ADDRESS, "contact": CONTACT})
 
 
 PRIVACY = _page("Prism WhatsApp platform: Privacy Policy", """
@@ -115,6 +153,10 @@ records, without the delivery address and note.</p>
 
 
 def mount(app: FastAPI) -> None:
+    @app.get("/", response_class=HTMLResponse)
+    def home():
+        return HTMLResponse(HOME)
+
     @app.get("/privacy", response_class=HTMLResponse)
     def privacy():
         return HTMLResponse(PRIVACY)
