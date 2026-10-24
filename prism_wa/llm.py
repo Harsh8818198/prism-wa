@@ -25,8 +25,13 @@ class LLMError(Exception):
         self.status = status
 
 
+USER_AGENT = "prism-wa/1.0"
+
+
 def urllib_transport(method: str, url: str, data: Optional[bytes], headers: dict) -> tuple:
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    # Python's own default signature ("Python-urllib/3.x") is refused by Groq's gateway with the plain text "error code: 1010" (Cloudflare), so every call said it was
+    # unreadable. Say who we are.
+    req = urllib.request.Request(url, data=data, method=method, headers={"User-Agent": USER_AGENT, "Accept": "application/json", **headers})
     try:
         with urllib.request.urlopen(req, timeout=40) as resp:                       # noqa: S310  (the configured API address)
             return resp.status, resp.read()
@@ -52,7 +57,8 @@ class LLM:
         try:
             data = json.loads(raw or b"{}")
         except ValueError:
-            raise LLMError("the language model sent something unreadable", status) from None
+            seen = (raw or b"")[:120].decode("utf-8", "replace").strip().replace("\n", " ")
+            raise LLMError("the language model sent something unreadable (HTTP %s%s)" % (status, ": " + seen if seen else ""), status) from None
         if status >= 400:
             message = ((data.get("error") or {}).get("message") if isinstance(data.get("error"), dict) else None) or "refused (%s)" % status
             raise LLMError("the language model said: %s" % message, status)
