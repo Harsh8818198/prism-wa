@@ -141,6 +141,33 @@ def complete_signup(conn, *, graph: Graph, vault: Vault, tenant_id, app_id: str,
         waba_id, phone_number_id, found = _find_what_was_connected(graph, token, app_id, app_secret, waba_id, phone_number_id)
         display = display or found
 
+    return connect_account(conn, graph=graph, vault=vault, tenant_id=tenant_id, token=token, waba_id=waba_id, phone_number_id=phone_number_id, display=display,
+                           override_callback_uri=override_callback_uri, verify_token=verify_token, coexistence=coexistence, register=not coexistence, sync=coexistence)
+
+
+def attach_existing_account(conn, *, graph: Graph, vault: Vault, tenant_id, token: str, waba_id: str, phone_number_id: str, coexistence: bool = False,
+                            override_callback_uri: str = "", verify_token: str = "", sync: bool = False) -> SignupResult:
+    """Connect a number that is ALREADY live on Meta's cloud, with a token its owner made in Meta's Business settings (a system user with access to the account).
+    No pop-up and no sign-up code: for our own account, and for the first customers while Embedded Signup is not yet open to us. Nothing is registered (the number
+    already is); we check the token really reaches that account and that the number is on it, then store the token and subscribe our app."""
+    if not (token and waba_id and phone_number_id):
+        raise OnboardingError("incomplete", "an access token, the WhatsApp Business Account id and the phone number id are all needed")
+    try:
+        numbers = graph.waba_numbers(token, waba_id)
+    except GraphError as exc:
+        raise OnboardingError("token_rejected", "Meta did not accept that token for that account: %s" % exc.message) from exc
+    found = next((n for n in numbers if str(n.get("id")) == str(phone_number_id)), None)
+    if found is None:
+        raise OnboardingError("number_not_on_account", "that number is not on that WhatsApp Business Account")
+    return connect_account(conn, graph=graph, vault=vault, tenant_id=tenant_id, token=token, waba_id=waba_id, phone_number_id=phone_number_id,
+                           display=str(found.get("display_phone_number") or ""), override_callback_uri=override_callback_uri, verify_token=verify_token,
+                           coexistence=coexistence, register=False, sync=sync)
+
+
+def connect_account(conn, *, graph: Graph, vault: Vault, tenant_id, token: str, waba_id: str, phone_number_id: str, display: str = "",
+                    override_callback_uri: str = "", verify_token: str = "", coexistence: bool = False, register: bool = True, sync: bool = False) -> SignupResult:
+    """Store the customer's token (encrypted), record their account and number under the tenant, register the number if asked, subscribe our app. Every step is
+    safe to repeat. `register=False` for a number that is already live; `sync` asks Meta for the phone app's contacts and chats (coexistence, first 24 hours only)."""
     token_enc, key_ver = vault.encrypt(token, context=waba_id)
     errors = []
     try:
@@ -183,7 +210,7 @@ def complete_signup(conn, *, graph: Graph, vault: Vault, tenant_id, app_id: str,
         raise
 
     registered = subscribed = False
-    if coexistence:                                         # the number already lives in the WhatsApp Business app on the phone: Meta connects it, we do not register it
+    if not register:                                        # a coexistence number (it lives in the WhatsApp Business app on the phone) or one already live: we do not register it
         registered = True
     else:
         try:
@@ -207,7 +234,7 @@ def complete_signup(conn, *, graph: Graph, vault: Vault, tenant_id, app_id: str,
         cur.execute("update wabas set subscribed_at = case when %s then now() else subscribed_at end"
                     " where id = %s", (subscribed, waba_row))
     conn.commit()
-    if coexistence and subscribed:                          # Meta only sends the phone's contacts and chats in the first 24 hours: ask now
+    if sync and subscribed:                                 # Meta only sends the phone's contacts and chats in the first 24 hours: ask now
         from prism_wa import coexistence as _co
         try:
             with conn.cursor() as cur:

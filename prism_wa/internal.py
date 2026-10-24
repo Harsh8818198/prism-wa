@@ -190,6 +190,37 @@ def register(app: FastAPI, *, internal_token: str, connect: Callable, graph: Gra
         finally:
             conn.close()
 
+    def _attach(data: dict, tenant_id: str):
+        conn = connect()
+        try:
+            return onboarding.attach_existing_account(
+                conn, graph=graph, vault=vault, tenant_id=tenant_id, token=str(data.get("access_token") or ""),
+                waba_id=str(data.get("waba_id") or ""), phone_number_id=str(data.get("phone_number_id") or ""),
+                coexistence=bool(data.get("coexistence")), sync=bool(data.get("sync")))
+        finally:
+            conn.close()
+
+    @app.post("/internal/onboarding/attach")
+    async def onboarding_attach(request: Request):
+        """Connect a number that is already live on Meta, with a token made in the owner's Business settings (see onboarding.attach_existing_account)."""
+        if not authorised(request):
+            return await refuse(request)
+        data = await body_of(request)
+        if data is None or not _is_uuid(data.get("tenant_id")):
+            return _bad("tenant_id is required")
+        if vault is None:
+            return JSONResponse({"ok": False, "error": "not_configured", "message": "token encryption is not set up on this server"}, status_code=503)
+        try:
+            result = await run_in_threadpool(_attach, data, str(data["tenant_id"]))
+        except onboarding.OnboardingError as exc:
+            status = {"waba_taken": 409, "number_taken": 409}.get(exc.reason, 400)
+            return JSONResponse({"ok": False, "error": exc.reason, "message": str(exc)}, status_code=status)
+        except Exception:                                   # noqa: BLE001
+            log.exception("attaching a number failed")
+            return JSONResponse({"ok": False, "error": "server_error", "message": "Please try again."}, status_code=500)
+        return {"ok": result.registered and result.subscribed, "waba_id": result.waba_id, "phone_number_id": result.phone_number_id,
+                "registered": result.registered, "subscribed": result.subscribed, "errors": result.errors}
+
     @app.post("/onboarding/complete")
     async def onboarding_complete(request: Request):
         data = await body_of(request)

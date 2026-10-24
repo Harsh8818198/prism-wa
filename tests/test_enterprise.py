@@ -70,6 +70,7 @@ class Provider:
 class FakeMeta:
     def __init__(self):
         self.calls, self.refuse = [], None
+        self.deny_numbers = False
         self.shared, self.numbers = None, None              # what Meta would say the customer shared / which numbers an account has (None: not asked in this test)
 
     def __call__(self, method, url, data, headers):
@@ -80,6 +81,8 @@ class FakeMeta:
         if path == "debug_token" and self.shared is not None:
             scopes = [{"scope": "whatsapp_business_management", "target_ids": self.shared}, {"scope": "business_management"}]
             return 200, json.dumps({"data": {"is_valid": True, "granular_scopes": scopes}}).encode()
+        if path.endswith("/phone_numbers") and self.deny_numbers:
+            return 400, json.dumps({"error": {"message": "Invalid OAuth access token.", "code": 190}}).encode()
         if path.endswith("/phone_numbers") and self.numbers is not None:
             return 200, json.dumps({"data": self.numbers}).encode()
         if path.endswith("/smb_app_data") and self.refuse:
@@ -702,6 +705,53 @@ def test_a_signup_that_cannot_be_pinned_to_one_number_is_refused_and_stores_noth
     assert why.value.reason == reason
     assert world.db.one("select token_enc is null from wabas where waba_id = %s", (P.WABA,)) is True
     assert not any(x["path"].endswith(("/subscribed_apps", "/register", "/smb_app_data")) for x in world.meta_.calls)
+
+
+def test_a_number_already_live_on_meta_is_attached_with_a_token_and_nothing_is_registered_or_asked_for(world):
+    world.db.q("update wabas set token_enc = null")
+    world.meta_.numbers = [{"id": P.PNID, "display_phone_number": "+91 97260 63133"}]
+    c = world.conn()
+    result = onboarding.attach_existing_account(c, graph=world.graph_, vault=world.vault_, tenant_id=world.tid_, token="EAAB-system-user-token", waba_id=P.WABA, phone_number_id=P.PNID,
+                                                coexistence=True)
+    c.close()
+    assert result.registered and result.subscribed and not result.errors
+    paths = [x["path"] for x in world.meta_.calls]
+    assert not any(p.endswith(("/register", "/smb_app_data")) or p == "oauth/access_token" for p in paths)       # no sign-up code, no register, no history asked for
+    assert any(p.endswith("/subscribed_apps") for p in paths)
+    row = world.db.q("select coexistence, status from phone_numbers where phone_number_id = %s", (P.PNID,))[0]
+    assert row["coexistence"] is True and row["status"] == "connected"
+    blob = world.db.one("select token_enc from wabas where waba_id = %s", (P.WABA,))
+    assert world.vault_.decrypt(bytes(blob), context=P.WABA) == "EAAB-system-user-token"                          # stored encrypted, readable only with the key
+
+
+def test_attaching_refuses_a_number_that_is_not_on_that_account_or_a_token_meta_rejects_and_stores_nothing(world):
+    world.db.q("update wabas set token_enc = null")
+    world.meta_.numbers = [{"id": "555000777"}]
+    c = world.conn()
+    with pytest.raises(onboarding.OnboardingError) as why:
+        onboarding.attach_existing_account(c, graph=world.graph_, vault=world.vault_, tenant_id=world.tid_, token="EAAB-x", waba_id=P.WABA, phone_number_id=P.PNID)
+    assert why.value.reason == "number_not_on_account"
+    world.meta_.deny_numbers = True
+    with pytest.raises(onboarding.OnboardingError) as why:
+        onboarding.attach_existing_account(c, graph=world.graph_, vault=world.vault_, tenant_id=world.tid_, token="EAAB-x", waba_id=P.WABA, phone_number_id=P.PNID)
+    c.close()
+    assert why.value.reason == "token_rejected" and "Invalid OAuth" in str(why.value)
+    assert world.db.one("select token_enc is null from wabas where waba_id = %s", (P.WABA,)) is True
+    assert not any(x["path"].endswith("/subscribed_apps") for x in world.meta_.calls)
+
+
+def test_the_attach_route_needs_the_internal_token_and_a_workspace_and_answers_plainly(world):
+    world.meta_.numbers = [{"id": P.PNID, "display_phone_number": "+91 97260 63133"}]
+    body = {"tenant_id": str(world.tid_), "waba_id": P.WABA, "phone_number_id": P.PNID, "access_token": "EAAB-system-user-token"}
+    ok = world.post("/internal/onboarding/attach", **{k: v for k, v in body.items() if k != "tenant_id"})
+    assert ok.status_code == 200 and ok.json()["ok"] is True and ok.json()["phone_number_id"] == P.PNID
+    assert "EAAB-system-user-token" not in ok.text                                                              # the token is never echoed back
+    anon = TestClient(create_app(app_secrets="s", verify_token="v", connect=lambda: psycopg2.connect(world.db.dsn), internal_token="tok", graph=world.graph_, vault=world.vault_))
+    assert anon.post("/internal/onboarding/attach", json=body).status_code == 401
+    assert world.post("/internal/onboarding/attach", tenant_id="not-a-uuid").status_code == 400
+    world.meta_.numbers = []
+    refused = world.post("/internal/onboarding/attach", **{k: v for k, v in body.items() if k != "tenant_id"})
+    assert refused.status_code == 400 and refused.json()["error"] == "number_not_on_account"
 
 
 def test_a_signup_without_its_code_is_still_refused(world):
