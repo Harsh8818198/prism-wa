@@ -14,7 +14,7 @@ Optional, switching on the rest of the service:
   WA_GRAPH_VERSION    Graph API version (default in graph.py)
   WA_LLM_API_KEY      switches AI agents on (an OpenAI-compatible API key, e.g. Groq's)
   WA_LLM_BASE_URL     default https://api.groq.com/openai/v1
-  WA_LLM_MODEL        default llama-3.3-70b-versatile
+  WA_LLM_MODEL        default openai/gpt-oss-120b (see llm.py)
   LOG_LEVEL           INFO (default), DEBUG, WARNING...
   WA_EMBEDDED_WORKER  yes: run the worker as a thread of this process (a host with no background-worker service; see embedded.py)
   WA_MIGRATE_ON_START yes: apply missing migrations when the service starts (a host with no pre-deploy step; see migrate.py)

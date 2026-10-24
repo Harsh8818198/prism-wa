@@ -6,7 +6,7 @@ HTTP is injectable (the same shape as graph.py's transport) so tests never touch
 Configuration is from the environment (main.py / worker.py read it):
     WA_LLM_BASE_URL   default https://api.groq.com/openai/v1
     WA_LLM_API_KEY    required for AI agents to answer; without it they hand every chat to a person
-    WA_LLM_MODEL      default llama-3.3-70b-versatile
+    WA_LLM_MODEL      default openai/gpt-oss-120b (Groq retired llama-3.3-70b-versatile on 16 Aug 2026 and names this as its replacement)
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import urllib.request
 from typing import Callable, Optional
 
 DEFAULT_BASE = "https://api.groq.com/openai/v1"
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 
 
 class LLMError(Exception):
