@@ -27,6 +27,23 @@ class LLMError(Exception):
 
 USER_AGENT = "prism-wa/1.0"
 
+# gpt-oss "thinks" before it answers, and that thinking is counted against max_tokens. A caller that asks for 500 tokens of JSON (the AI agent does)
+# would get its answer cut off mid-way, and Groq then says "Failed to generate JSON". Callers pass the size of the ANSWER they want; this is added for the thinking.
+THINKING_ROOM = 1024
+MAX_TOKENS_CAP = 4096
+
+
+def _thinks(model: str) -> bool:
+    return "gpt-oss" in (model or "").lower()
+
+
+def _failed_generation(status: int, raw: bytes) -> bool:
+    """Groq's way of saying the model's answer was not valid JSON (usually because it ran out of room)."""
+    if status != 400:
+        return False
+    text = (raw or b"")[:600].decode("utf-8", "replace").lower()
+    return "failed_generation" in text or "failed to generate json" in text
+
 
 def urllib_transport(method: str, url: str, data: Optional[bytes], headers: dict) -> tuple:
     # Python's own default signature ("Python-urllib/3.x") is refused by Groq's gateway with the plain text "error code: 1010" (Cloudflare), so every call said it was
@@ -46,14 +63,28 @@ class LLM:
                  transport: Callable = urllib_transport):
         self.api_key, self.base_url, self.model, self._transport = api_key, base_url.rstrip("/"), model, transport
 
+    def _post(self, body: dict) -> tuple:
+        return self._transport("POST", self.base_url + "/chat/completions", json.dumps(body).encode("utf-8"),
+                               {"Authorization": "Bearer " + self.api_key, "Content-Type": "application/json"})
+
     def chat(self, messages: list, *, model: Optional[str] = None, max_tokens: int = 500, temperature: float = 0.2,
              json_mode: bool = False) -> tuple:
         """-> (reply text, {"tokens_in": n, "tokens_out": n})."""
-        body = {"model": model or self.model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+        chosen = model or self.model
+        body = {"model": chosen, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+        if _thinks(chosen):
+            body["max_tokens"] = min(max_tokens + THINKING_ROOM, MAX_TOKENS_CAP)       # room to think AND to answer
+            if "groq.com" in self.base_url:
+                body["reasoning_effort"] = "low"                                       # a short customer reply needs little thinking
         if json_mode:
             body["response_format"] = {"type": "json_object"}
-        status, raw = self._transport("POST", self.base_url + "/chat/completions", json.dumps(body).encode("utf-8"),
-                                      {"Authorization": "Bearer " + self.api_key, "Content-Type": "application/json"})
+        status, raw = self._post(body)
+        if json_mode and _failed_generation(status, raw):
+            # The model's answer was cut off or not valid JSON. Ask again without insisting on JSON mode and with twice the room; the callers
+            # already read a plain-text answer (ai_agent.parse_reply finds the JSON in it, or takes it as the reply).
+            body.pop("response_format", None)
+            body["max_tokens"] = min(body["max_tokens"] * 2, MAX_TOKENS_CAP)
+            status, raw = self._post(body)
         try:
             data = json.loads(raw or b"{}")
         except ValueError:
