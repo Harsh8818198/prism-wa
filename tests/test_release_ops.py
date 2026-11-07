@@ -530,3 +530,48 @@ def test_a_workspace_can_be_looked_up_by_the_licence_server_and_only_with_the_to
     assert ask("00000000-0000-4000-8000-000000000000").json() == {"ok": True, "exists": False}
     assert ask(tenant, headers={}).status_code == 401
     assert ask(tenant, headers={"X-Internal-Token": "wrong"}).status_code == 401
+
+
+# ── the licence server asks THIS service to make a customer's workspace on first use (nobody runs SQL for each customer) ────────────────────────
+
+from prism_wa import workspaces                                                  # noqa: E402
+
+LICENCE = "lic_3f9a1c7d2b"
+
+
+def test_a_workspace_name_is_the_licence_id_and_nothing_else_can_pass_for_one():
+    assert workspaces.slug_for(" LIC_3F9A1C7D2B ") == "lic-lic3f9a1c7d2b"        # lower case, only letters digits and dashes survive
+    for bad in ("", "abc", "x" * 5, "../etc", None):
+        with pytest.raises(workspaces.WorkspaceError):
+            workspaces.slug_for(bad)
+
+
+def test_the_workspace_is_made_once_and_asking_again_gives_the_same_one(migrated):
+    client = TestClient(create_app(app_secrets=SECRET, verify_token=TOKEN, connect=connect_to(migrated), internal_token=INTERNAL))
+    head = {"X-Internal-Token": INTERNAL}
+    first = client.post("/internal/tenant/ensure", json={"external_id": LICENCE, "name": "Asha Co"}, headers=head).json()
+    again = client.post("/internal/tenant/ensure", json={"external_id": LICENCE, "name": "A different name"}, headers=head).json()
+    assert first["ok"] and first["created"] is True
+    assert again == {"ok": True, "tenant_id": first["tenant_id"], "created": False}
+    assert migrated.one("select count(*) from tenants where slug = %s", (workspaces.slug_for(LICENCE),)) == 1
+    assert migrated.one("select name from tenants where id = %s", (first["tenant_id"],)) == "Asha Co"      # the first name stands
+    exists = client.post("/internal/tenant/exists", json={"tenant_id": first["tenant_id"]}, headers=head).json()
+    assert exists == {"ok": True, "exists": True}                                                              # and the platform can see it
+
+
+def test_two_licences_get_two_workspaces(migrated):
+    client = TestClient(create_app(app_secrets=SECRET, verify_token=TOKEN, connect=connect_to(migrated), internal_token=INTERNAL))
+    head = {"X-Internal-Token": INTERNAL}
+    a = client.post("/internal/tenant/ensure", json={"external_id": "lic_aaaaaaaaaa", "name": "A"}, headers=head).json()["tenant_id"]
+    b = client.post("/internal/tenant/ensure", json={"external_id": "lic_bbbbbbbbbb", "name": "B"}, headers=head).json()["tenant_id"]
+    assert a != b
+
+
+def test_only_the_licence_server_can_ask_and_a_bad_id_makes_nothing(migrated):
+    client = TestClient(create_app(app_secrets=SECRET, verify_token=TOKEN, connect=connect_to(migrated), internal_token=INTERNAL))
+    before = migrated.one("select count(*) from tenants")
+    assert client.post("/internal/tenant/ensure", json={"external_id": LICENCE}).status_code == 401
+    assert client.post("/internal/tenant/ensure", json={"external_id": LICENCE}, headers={"X-Internal-Token": "wrong"}).status_code == 401
+    refused = client.post("/internal/tenant/ensure", json={"external_id": "../x"}, headers={"X-Internal-Token": INTERNAL})
+    assert refused.status_code == 400
+    assert migrated.one("select count(*) from tenants") == before

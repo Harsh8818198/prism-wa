@@ -7,6 +7,7 @@
                POST /internal/reply              queue a free-form reply
                POST /internal/broadcast          queue one template to many contacts
                POST /internal/onboarding/link    a signed connect link for a tenant
+               POST /internal/tenant/ensure      the workspace for a licence, made on first use (idempotent)
 /onboarding  The page a customer opens to connect their own number, and the
              endpoint it posts to. It carries a short-lived signed `state` that
              names the tenant, so it needs no secret of its own.
@@ -25,7 +26,7 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
-from prism_wa import campaigns, inbox, onboarding, ops, send
+from prism_wa import campaigns, inbox, onboarding, ops, send, workspaces
 from prism_wa.graph import Graph
 from prism_wa.ops_common import refuse
 from prism_wa.send import SendRefused
@@ -156,6 +157,32 @@ def register(app: FastAPI, *, internal_token: str, connect: Callable, graph: Gra
         except SendRefused as exc:
             return _refused(exc)
         return {"ok": True, "queued": queued, "refused": refused}
+
+    # ── workspaces ───────────────────────────────────────────────────────────
+    def _ensure_workspace(data: dict):
+        conn = connect()
+        try:
+            with conn.cursor() as cur:
+                tenant_id, created = workspaces.ensure(cur, str(data.get("external_id") or ""), str(data.get("name") or ""))
+            conn.commit()
+            return {"ok": True, "tenant_id": tenant_id, "created": created}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @app.post("/internal/tenant/ensure")
+    async def tenant_ensure(request: Request):
+        if not authorised(request):
+            return await refuse(request)
+        data = await body_of(request)
+        if data is None:
+            return _bad("a JSON body is required")
+        try:
+            return await run_in_threadpool(_ensure_workspace, data)
+        except workspaces.WorkspaceError as exc:
+            return _bad(str(exc))
 
     # ── onboarding ───────────────────────────────────────────────────────────
     @app.post("/internal/onboarding/link")
