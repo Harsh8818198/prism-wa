@@ -213,7 +213,8 @@ def register(app: FastAPI, *, internal_token: str, connect: Callable, graph: Gra
                 conn, graph=graph, vault=vault, tenant_id=tenant_id, app_id=app_id, app_secret=app_secret,
                 code=str(data.get("code") or ""), waba_id=str(data.get("waba_id") or ""),
                 phone_number_id=str(data.get("phone_number_id") or ""), display=str(data.get("display") or ""),
-                coexistence=bool(data.get("coexistence")))
+                # a number Meta says came from the WhatsApp Business app is never registered here (that would sign the phone app out), whichever button was pressed
+                coexistence=bool(data.get("coexistence")) or data.get("is_on_biz_app") is True)
         finally:
             conn.close()
 

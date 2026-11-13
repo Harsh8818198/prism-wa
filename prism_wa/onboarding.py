@@ -276,7 +276,10 @@ window.addEventListener('message', function (e) {
     const d = data.data || {};
     // FINISH: a new number. FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING: a number from the WhatsApp Business app (it may name neither account nor number: the server then asks Meta).
     if (data.event === 'FINISH' || data.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING') {
-      session = { waba_id: d.waba_id || session.waba_id, phone_number_id: d.phone_number_id || session.phone_number_id };
+      // v5 names the account in messaging_account_ids (waba_id is gone) and says whether the number came from the WhatsApp Business app.
+      const ids = Array.isArray(d.messaging_account_ids) ? d.messaging_account_ids : [];
+      session = { waba_id: d.waba_id || ids[0] || session.waba_id, phone_number_id: d.phone_number_id || session.phone_number_id,
+                  is_on_biz_app: d.is_on_biz_app === true || data.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING' || session.is_on_biz_app === true };
     } else if (data.event === 'CANCEL') {
       stoppedAt = (d.error_message ? d.error_message + ' ' : '') + (d.current_step ? '(at the "' + d.current_step + '" step)' : '');
     }
@@ -292,8 +295,10 @@ document.getElementById('go').addEventListener('click', function () {
                                               : 'Could not finish: ' + (j.message || j.error)))
       .catch(() => say('Could not reach the server. Try again.'));
   }, { config_id: CFG.configId, response_type: 'code', override_default_response_type: true,
-       extras: CFG.coexistence ? { setup: {}, featureType: 'whatsapp_business_app_onboarding', sessionInfoVersion: '3' }
-                               : { setup: {}, sessionInfoVersion: '3' } });
+       // Embedded Signup v5: the WhatsApp Business app option is ON by default. The plain button turns it off, so it never offers a number that must NOT be
+       // registered here; the "keep using the phone app" button asks for it (featureType is still sent: harmless on v5, needed if Meta falls back to v4).
+       extras: CFG.coexistence ? { setup: {}, version: 'v5', featureType: 'whatsapp_business_app_onboarding', sessionInfoVersion: '3' }
+                               : { setup: {}, version: 'v5', features: [{ name: 'whatsapp_business_app_onboarding', enabled: false }], sessionInfoVersion: '3' } });
 });
 </script>
 <script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js"></script>

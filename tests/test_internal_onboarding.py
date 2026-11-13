@@ -226,6 +226,24 @@ def test_a_signup_stores_an_encrypted_token_registers_the_number_and_subscribes(
     assert any(u.endswith("/W-NEW/subscribed_apps") for _, u, _ in meta.calls)
 
 
+def test_a_number_meta_says_came_from_the_phone_app_is_never_registered_whichever_button_was_pressed(migrated, meta, vault):
+    tenant = H.tenant(migrated, "orena")
+    r = signup(make_client(migrated, meta, vault), tenant, is_on_biz_app=True)             # the plain button, but Meta says it is a Business-app number
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert meta.pins() == []                                                                # registering it would sign the phone app out
+    assert migrated.one("select coexistence from phone_numbers") is True
+
+
+def test_the_onboarding_page_asks_for_signup_v5_and_reads_its_new_reply(migrated):
+    plain = onboarding.render_page(app_id="123", config_id="456", state="s", version="v25.0")
+    co = onboarding.render_page(app_id="123", config_id="456", state="s", version="v25.0", coexistence=True)
+    for page in (plain, co):
+        assert "version: 'v5'" in page and "messaging_account_ids" in page and "is_on_biz_app" in page
+    assert "features: [{ name: 'whatsapp_business_app_onboarding', enabled: false }]" in plain            # the plain button opts out of the phone-app choice (one page, two branches)
+    assert '"coexistence": false' in plain and '"coexistence": true' in co
+    assert "featureType: 'whatsapp_business_app_onboarding'" in co
+
+
 def test_a_signup_is_safe_to_repeat_and_keeps_the_same_pin(migrated, meta, vault):
     tenant = H.tenant(migrated, "orena")
     c = make_client(migrated, meta, vault)
