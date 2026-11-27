@@ -121,7 +121,7 @@ def test_the_prompt_carries_the_rules_the_knowledge_and_the_recent_chat():
 @pytest.fixture
 def world(migrated, model):
     tenant_id, number_id = H.onboard(migrated)
-    migrated.q("insert into tenant_settings (tenant_id, settings) values (%s, '{\"plan\": \"premium\"}')", (tenant_id,))
+    migrated.q("insert into tenant_settings (tenant_id, settings) values (%s, '{\"plan\": \"premium+ai_agent\"}')", (tenant_id,))
 
     class W:
         db, tid, nid, llm = migrated, tenant_id, number_id, model
@@ -280,7 +280,7 @@ def test_an_agent_set_to_cover_the_closed_hours_stays_quiet_while_people_are_in(
 
 def test_a_flow_that_takes_the_message_keeps_the_agent_out_of_it(world):
     world.agent()
-    world.db.q("update tenant_settings set settings = settings || '{\"plan\": \"premium\"}'")
+    world.db.q("update tenant_settings set settings = settings || '{\"plan\": \"premium+chatbot+ai_agent\"}'")
     conn = world.conn()
     with conn.cursor() as cur:
         fid = flows.create(cur, world.tid, "Price", trigger={"type": "keyword", "match": "exact", "keywords": ["price"]},
@@ -330,7 +330,7 @@ def test_the_basic_and_pro_plans_cannot_create_agents(world):
     world.db.q("update tenant_settings set settings = settings || '{\"plan\": \"pro\"}'")
     with pytest.raises(Exception) as e:
         in_db(world, lambda cur: ai_agent.create(cur, world.tid, "Aria"))
-    assert "plan" in str(e.value).lower()
+    assert "add-on" in str(e.value).lower()               # 27-Nov-2026: the AI agent is an add-on on any plan
 
 
 def test_only_one_agent_is_the_default_and_switching_off_clears_it(world):

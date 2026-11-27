@@ -59,7 +59,7 @@ def test_a_pretend_walk_shows_what_each_step_would_send():
 def world(migrated):
     vault = Vault({1: os.urandom(32)})
     tid, number = H.onboard(migrated)
-    migrated.q("insert into tenant_settings (tenant_id, settings) values (%s, '{\"plan\": \"pro\"}')", (tid,))
+    migrated.q("insert into tenant_settings (tenant_id, settings) values (%s, '{\"plan\": \"pro+chatbot\"}')", (tid,))
     payments.configure(vault)
     sent = []
 

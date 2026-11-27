@@ -74,6 +74,61 @@ def test_the_numbers_match_the_pricing_page():
     assert plans.lowest_with("template_api") == "basic" and plans.lowest_with("nonsense") is None
 
 
+# ── the Free tier, the add-ons and the catalogue (27-Nov-2026: plans "like aisensy") ─────────────────────────
+
+def test_free_is_the_bottom_tier_and_has_no_broadcasting():
+    assert plans.ORDER[0] == "free" and plans.LABELS["free"] == "Free"
+    assert not plans.has("free", "broadcast") and plans.has("free", "ads_manager")
+    L = plans.LIMITS["free"]
+    assert (L["tags"], L["attributes"], L["agents"], L["segments"]) == (10, 5, 1, 0)
+    assert plans.lowest_with("broadcast") == "basic"
+
+
+def test_flows_and_the_ai_agent_are_add_ons_not_part_of_a_tier():
+    for tier in ("free", "basic", "pro", "premium", "unlimited"):
+        assert not plans.has(tier, "flows") and not plans.has(tier, "ai_agent"), tier
+        assert plans.LIMITS[tier]["flows"] == 0 and plans.LIMITS[tier]["ai_messages"] == 0, tier
+    assert plans.has("basic+chatbot", "flows") and plans.limits_of("basic+chatbot")["flows"] == 5
+    assert plans.has("pro+ai_agent", "ai_agent") and plans.limits_of("pro+ai_agent")["ai_messages"] == 1000
+    assert plans.has("enterprise", "flows") and plans.has("enterprise", "ai_agent")        # custom terms: everything
+    assert plans.addon_with("flows") == "chatbot" and plans.addon_with("ai_agent") == "ai_agent"
+
+
+def test_the_stored_value_is_canonical_and_seats_add_to_the_agents():
+    assert plans.normalise("PRO+ai_agent+chatbot+seats2+seats1+gold") == "pro+ai_agent+chatbot+seats3"
+    assert plans.normalise("platinum+chatbot") == "basic+chatbot"                         # an unknown tier is Basic
+    assert plans.base("premium+chatbot") == "premium" and plans.seats_of("basic+seats4") == 4
+    assert plans.limits_of("basic+seats4")["agents"] == 10 and plans.limits_of("enterprise+seats4")["agents"] is None
+
+
+def test_a_refusal_names_the_add_on_that_brings_it():
+    class Cur:
+        def execute(self, *a):
+            pass
+
+        def fetchone(self):
+            return ("pro",)
+    with pytest.raises(PlanLimit) as e:
+        plans.require(Cur(), "t", "ai_agent", "AI agents")
+    assert e.value.needs == "addon:ai_agent" and "add-on" in str(e.value)
+    with pytest.raises(PlanLimit) as e:
+        plans.require(Cur(), "t", "number_masking", "Number masking")
+    assert e.value.needs == "premium"
+
+
+def test_the_catalogue_lists_every_tier_price_limit_feature_and_add_on():
+    c = plans.catalogue()
+    assert [t["plan"] for t in c["tiers"]] == list(plans.ORDER)
+    assert [t["price"] for t in c["tiers"]] == [0, 1500, 3200, 9100, 45000, None]
+    pro = next(t for t in c["tiers"] if t["plan"] == "pro")
+    assert "scheduler" in pro["features"] and "number_masking" not in pro["features"] and pro["limits"]["tags"] == 100
+    assert {a["addon"]: a["price"] for a in c["addons"]} == {"chatbot": 2500, "ai_agent": 1350, "seat": 750}
+    assert c["billing_discount"] == {"monthly": 0, "quarterly": 5, "yearly": 10}
+    labelled = {f["key"] for f in c["features"]}
+    for t in c["tiers"]:
+        assert set(t["features"]) <= labelled
+
+
 def test_an_unknown_plan_is_basic_and_the_plan_is_stored_without_losing_other_settings(world):
     assert world.do(plans.plan_of) == "basic"
     for said, got in (("PRO", "pro"), (" Premium ", "premium"), ("platinum", "basic"), ("", "basic"), (None, "basic")):

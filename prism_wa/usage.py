@@ -117,8 +117,9 @@ def _count(cur, sql: str, params: tuple) -> int:
 def plan_view(cur, tenant_id, *, now: Optional[dt.datetime] = None) -> dict:
     """The plan, each ceiling against what is in use, and this month's estimated Meta spend so far."""
     now = now or utcnow()
-    plan = plans.plan_of(cur, tenant_id)
-    limits = plans.LIMITS[plan]
+    plan = plans.plan_of(cur, tenant_id)                # the tier with its add-ons: "pro+chatbot+seats2"
+    tier = plans.base(plan)
+    limits = plans.limits_of(plan)
     q = media.quota(cur, tenant_id)
     ai = ai_agent.usage(cur, tenant_id, now=now)
     used = {"tags": len(contact_book._known_tags(cur, tenant_id)),
@@ -132,7 +133,9 @@ def plan_view(cur, tenant_id, *, now: Optional[dt.datetime] = None) -> dict:
             ("agents", "tags", "attributes", "segments", "flows", "webhooks", "ai_messages", "storage_mb", "mps")]
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     month = summary(cur, tenant_id, month_start, now + dt.timedelta(seconds=1), now=now)
-    return {"plan": plan, "label": plans.LABELS[plan], "limits": rows, "features": sorted(plans.FEATURES[plan]),
-            "next_plan": next((p for p in plans.ORDER[plans.ORDER.index(plan) + 1:]), None),
+    return {"plan": tier, "label": plans.LABELS[tier], "limits": rows, "features": sorted(plans.features_of(plan)),
+            "addons": list(plans.addons_of(plan)), "extra_seats": plans.seats_of(plan),
+            "next_plan": next((p for p in plans.ORDER[plans.ORDER.index(tier) + 1:]), None),
+            "catalogue": plans.catalogue(),
             "month": {"label": now.strftime("%B %Y"), "totals": month["totals"], "by_category": month["by_category"]},
             "storage": q, "ai": ai, "rates": month["rates"], "gst": GST, "is_estimate": True}
