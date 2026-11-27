@@ -206,7 +206,7 @@ def test_a_bot_can_never_call_this_machine_or_a_private_network():
 @pytest.fixture
 def world(migrated):
     tenant_id, number_id = H.onboard(migrated)
-    migrated.q("insert into tenant_settings (tenant_id, settings) values (%s, '{\"plan\": \"pro\"}')", (tenant_id,))
+    migrated.q("insert into tenant_settings (tenant_id, settings) values (%s, '{\"plan\": \"pro+chatbot\"}')", (tenant_id,))
 
     class W:
         db, tid, nid = migrated, tenant_id, number_id
@@ -346,7 +346,7 @@ def test_a_basic_plan_gets_no_flows(world):
     with conn.cursor() as cur:
         with pytest.raises(Exception) as e:
             flows.create(cur, world.tid, "Nope", trigger=HELLO, graph=MENU)
-        assert "plan" in str(e.value).lower()
+        assert "add-on" in str(e.value).lower()           # 27-Nov-2026: Chatbot flows are an add-on on any plan
     conn.close()
 
 
@@ -495,7 +495,7 @@ def test_a_flow_can_set_attributes_and_branch_on_them_later(world):
 
 
 def test_the_agent_step_hands_the_chat_to_an_enabled_ai_agent(world):
-    world.db.q("update tenant_settings set settings = settings || '{\"plan\": \"premium\"}'")
+    world.db.q("update tenant_settings set settings = settings || '{\"plan\": \"premium+chatbot+ai_agent\"}'")
     aid = world.db.one("insert into ai_agents (tenant_id, name, enabled, is_default) values (%s, 'Aria', true, true) returning id", (world.tid,))
     g = {"entry": "a", "nodes": {"a": {"type": "send_text", "text": "Let me hand you to Aria", "next": "g"}, "g": {"type": "agent"}}}
     world.flow(g)

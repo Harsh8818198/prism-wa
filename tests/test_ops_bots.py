@@ -35,7 +35,7 @@ class Model:
 @pytest.fixture
 def api(migrated):
     tid, number = H.onboard(migrated)
-    migrated.q("insert into tenant_settings (tenant_id, settings) values (%s, '{\"plan\": \"premium\"}')", (tid,))
+    migrated.q("insert into tenant_settings (tenant_id, settings) values (%s, '{\"plan\": \"premium+chatbot+ai_agent\"}')", (tid,))
     waba = migrated.one("select id from wabas")
     migrated.q("insert into templates (tenant_id, waba_id, name, language, category, status, components)"
                " values (%s, %s, 'diwali', 'en_US', 'MARKETING', 'APPROVED', %s)", (tid, waba, json.dumps([BODY])))
@@ -158,7 +158,7 @@ def test_only_an_owner_or_manager_may_change_the_bots_but_anyone_may_look(api):
 def test_a_basic_plan_is_told_which_plan_has_flows(api):
     api.db.q("update tenant_settings set settings = settings || '{\"plan\": \"basic\"}'")
     r = api.post("/internal/flows/create", name="x")
-    assert r.status_code == 403 and r.json()["error"] == "plan_feature" and r.json()["needs"] == "pro"
+    assert r.status_code == 403 and r.json()["error"] == "plan_feature" and r.json()["needs"] == "addon:chatbot"
 
 
 # ── AI agents over HTTP ──────────────────────────────────────────────────────
@@ -199,7 +199,7 @@ def test_a_plan_without_ai_is_told_so(api):
     api.db.q("update tenant_settings set settings = settings || '{\"plan\": \"pro\"}'")
     assert ok(api.post("/internal/ai/status"))["included"] is False
     r = api.post("/internal/ai/agents/create", name="Aria")
-    assert r.status_code == 403 and r.json()["needs"] == "premium"
+    assert r.status_code == 403 and r.json()["needs"] == "addon:ai_agent"     # 27-Nov-2026: an add-on, not a plan
 
 
 # ── repeating campaigns and a test over HTTP ─────────────────────────────────

@@ -183,7 +183,7 @@ def test_the_tell_meta_step_is_only_a_note_in_a_test():
 @pytest.fixture
 def world(migrated, tmp_path):
     tenant_id, number_id = H.onboard(migrated)
-    migrated.q("insert into tenant_settings (tenant_id, settings) values (%s, '{\"plan\": \"premium\"}')", (tenant_id,))
+    migrated.q("insert into tenant_settings (tenant_id, settings) values (%s, '{\"plan\": \"premium+chatbot\"}')", (tenant_id,))
     vault = Vault({1: os.urandom(32)})
     blob, ver = vault.encrypt("EAAB-flow-token", context=P.WABA)
     migrated.q("update wabas set token_enc = %s, key_ver = %s", (psycopg2.Binary(blob), ver))

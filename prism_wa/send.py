@@ -325,7 +325,7 @@ def send_due(connect: Callable, *, graph: Graph, vault: Vault, limiter: Optional
                     "message_id", "campaign_id", "phone_number_id", "mps_limit", "waba_id", "token_enc", "retry", "plan")
             for row in cur.fetchall():
                 item = dict(zip(cols, row))
-                ceiling = plans.LIMITS[plans.normalise(item["plan"])]["mps"]
+                ceiling = plans.limits_of(item["plan"])["mps"]
                 rate = min(item["mps_limit"] or 80, ceiling) if ceiling else item["mps_limit"]
                 if not limiter.allow(item["number_id"], rate):
                     stats.throttled += 1

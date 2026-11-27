@@ -181,8 +181,9 @@ def test_only_a_manager_changes_the_rate_card(api):
 def test_the_plan_view_puts_each_limit_against_what_is_used(billed):
     billed.do(inbox.ensure_agent, "seat-owner", "Owner")
     billed.db.q("insert into tag_defs (tenant_id, name) values (%s, 'vip')", (billed.tid,))
-    out = billed.post("/internal/usage/plan", plan="premium").json()
+    out = billed.post("/internal/usage/plan", plan="premium+ai_agent").json()      # AI replies come with the add-on
     assert out["plan"] == "premium" and out["label"] == "Premium" and out["next_plan"] == "unlimited"
+    assert out["addons"] == ["ai_agent"] and [t["plan"] for t in out["catalogue"]["tiers"]][0] == "free"
     rows = {r["key"]: r for r in out["limits"]}
     assert rows["agents"] == {"key": "agents", "limit": 10, "used": 1} and rows["tags"]["used"] == 1 and rows["tags"]["limit"] == 250
     assert rows["storage_mb"]["limit"] == 5120 and rows["webhooks"]["limit"] == 1 and rows["ai_messages"]["limit"] == 1000
